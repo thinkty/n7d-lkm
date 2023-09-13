@@ -1,2 +1,11 @@
 # vscode configurations
 .vscode
+
+# Intermediate outputs
+*.cmd
+*.o
+*.mod
+*.mod.c
+*.ko
+*.symvers
+*.order 
