@@ -3,10 +3,10 @@
 #include <linux/fs.h>      /* struct file_operations    */
 #include <linux/init.h>    /* module_init,              */
 #include <linux/kernel.h>  /* printk                    */
-#include <linux/minmax.h>  /* min                       */
 #include <linux/module.h>  /*                           */
 
 #define DEV_MAX (2)        /* Maximum number of devices */
+#define BUF_SIZE (10)      /* Size of the device buffer */
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Tae Yoon Kim");
@@ -20,7 +20,7 @@ struct n7d_dev_data {
 } n7d_data[DEV_MAX];
 
 /* Sysfs class structure */
-static struct class * nd7_class = NULL;
+// static struct class * nd7_class = NULL;
 
 /**
  * @brief Open 
@@ -45,11 +45,10 @@ static int n7d_release(struct inode * inode, struct file * file)
  * 
  * @return Number of bytes successfully written.
  */
-static int n7d_write(struct file * file, const char __user *buf, size_t count, loff_t *offset)
+static ssize_t n7d_write(struct file * file, const char __user *buf, size_t count, loff_t *offset)
 {
-    size_t limit = 10;
-    uint8_t data[limit+1];
-    size_t tocopy = min(count, limit);
+    char data[BUF_SIZE+1];
+    size_t tocopy = count < BUF_SIZE ? count : BUF_SIZE;
     size_t copied = copy_from_user(data, buf, tocopy);
 
     if (copied > 0) {
@@ -70,9 +69,10 @@ static const struct file_operations n7d_fops = {
 /**
  * @brief
  */
-static int __init n7d_init()
+static int __init n7d_init(void)
 {
     dev_t dev;
+    int i = 0;
 
     int err = alloc_chrdev_region(&dev, 0, DEV_MAX, "n7d");
     if (err != 0) {
@@ -88,7 +88,7 @@ static int __init n7d_init()
     // nd7_class->dev_uevent = NULL; // TODO:
 
     /* Initialize & add character devices */
-    for (int i = 0; i < DEV_MAX; i++) {
+    for (i = 0; i < DEV_MAX; i++) {
         cdev_init(&n7d_data[i].cdev, &n7d_fops);
         n7d_data[i].cdev.owner = THIS_MODULE;
         cdev_add(&n7d_data[i].cdev, MKDEV(dev_major, i), 1);
@@ -103,7 +103,7 @@ static int __init n7d_init()
 /**
  * @brief
  */
-static void __exit n7d_exit()
+static void __exit n7d_exit(void)
 {
     // for (int i = 0; i < DEV_MAX; i++) {
     //     device_destroy(, MKDEV(dev_major, i));
@@ -112,6 +112,7 @@ static void __exit n7d_exit()
     // class_unregister(mychardev_class);
     // class_destroy(mychardev_class);
 
+    // TODO:
     unregister_chrdev_region(MKDEV(dev_major, 0), MINORMASK);
 
     printk("n7d: exit");
