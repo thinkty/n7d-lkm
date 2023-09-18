@@ -7,6 +7,7 @@
 
 #include <linux/err.h>
 #include <linux/slab.h>
+#include <linux/kobject.h>
 
 
 MODULE_AUTHOR("Tae Yoon Kim");
@@ -172,6 +173,29 @@ static int n7d_device_init(struct n7d_dev * dev, int minor)
 }
 
 /**
+ * @brief Callback function for managing environment variables for the device.
+ * Here, it is used to add the permissions for the device.
+ * 
+ * @param dev Pointer to the device
+ * @param env Device's environment buffer structure
+ * 
+ * @returns 0 on success, -ENOMEM if no memory available.
+ */
+static int n7d_uevent(struct device * dev, struct kobj_uevent_env * env)
+{
+    int err = 0;
+
+    /* Set the permissions as read-write for all */
+    err = add_uevent_var(env, "DEVMODE=%#o", 0666);
+    if (err < 0) {
+        printk(KERN_ERR "n7d: n7d_uevent() failed to set permission\n");
+        return err;
+    }
+
+    return 0;
+}
+
+/**
  * @brief Initialize the device by allocating its numbers (major, minor), and
  * creating a device class and its individual devices with its own data.
  * 
@@ -186,7 +210,7 @@ static int __init n7d_init(void)
     /* Allocate the appropriate device major number and a set of minor numbers */
     err = alloc_chrdev_region(&dev, 0, DEVICE_COUNT, DEVICE_NAME);
     if (err < 0) {
-        printk(KERN_ERR "[target] alloc_chrdev_region() failed\n");
+        printk(KERN_ERR "n7d: alloc_chrdev_region() failed\n");
         return err;
     }
 
@@ -200,6 +224,7 @@ static int __init n7d_init(void)
         n7d_cleanup(0);
         return err;
     }
+    n7d_class->dev_uevent = n7d_uevent;
 
     /* Allocate the array of devices from kernel memory */
     n7d_devices = (struct n7d_dev *) kzalloc(DEVICE_COUNT * sizeof(struct n7d_dev), GFP_KERNEL);
@@ -218,7 +243,7 @@ static int __init n7d_init(void)
         }
     }
 
-    printk(KERN_INFO "[target] successful init\n");
+    printk(KERN_INFO "n7d: successful init\n");
     return 0;
 }
 
@@ -229,7 +254,7 @@ static void __exit n7d_exit(void)
 {
     n7d_cleanup(DEVICE_COUNT);
 
-    printk(KERN_INFO "[target] exit\n");
+    printk(KERN_INFO "n7d: exit\n");
     return;
 }
 
