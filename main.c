@@ -1,14 +1,20 @@
+/**
+ * 
+ * Handles initialization and cleanup of the N7D device
+ * 
+ */
 
-#include <linux/kernel.h>  /* printk                    */
-#include <linux/init.h>    /* module_init,              */
-#include <linux/module.h>  /*                           */
-#include <linux/cdev.h>    /*                           */
-#include <linux/fs.h>      /* struct file_operations    */
-
+#include <linux/kernel.h>
+#include <linux/init.h>
+#include <linux/module.h>
+#include <linux/cdev.h>
+#include <linux/fs.h>
 #include <linux/err.h>
 #include <linux/slab.h>
 #include <linux/kobject.h>
 
+#include "include/n7d_dev.h"
+#include "include/n7d_ops.h"
 
 MODULE_AUTHOR("Tae Yoon Kim");
 MODULE_LICENSE("GPL");
@@ -16,58 +22,11 @@ MODULE_LICENSE("GPL");
 #define DEVICE_NAME "n7d"
 #define DEVICE_COUNT (1) /* Single device for now */
 
-
-#define DATA_LEN_MAX (10) // TODO: move to n7d_ops
-
-/* Device specific data */
-struct n7d_dev {
-    char * data;
-    unsigned int data_len;
-    struct cdev cdev;
-};
-
 static int n7d_major = 0;
 static struct n7d_dev * n7d_devices = NULL;
 static struct class * n7d_class = NULL;
 
-/**
- * @brief Open 
- */
-static int n7d_open(struct inode * inode, struct file * file)
-{
-    printk(KERN_INFO "n7d: open");
-    return 0;
-}
-
-/**
- * @brief Release
- */
-static int n7d_release(struct inode * inode, struct file * file)
-{
-    printk(KERN_INFO "n7d: release");
-    return 0;
-}
-
-/**
- * @brief Filter and write the data to the connected hardware.
- * 
- * @return Number of bytes successfully written.
- */
-static ssize_t n7d_write(struct file * file, const char __user *buf, size_t count, loff_t *offset)
-{
-    char data[DATA_LEN_MAX+1];
-    size_t tocopy = count < DATA_LEN_MAX ? count : DATA_LEN_MAX;
-    size_t copied = copy_from_user(data, buf, tocopy);
-
-    if (copied > 0) {
-        tocopy -= copied;
-    }
-    data[tocopy] = 0;
-    printk(KERN_INFO "n7d: write %u bytes, %s\n", tocopy, data);
-    return tocopy;
-}
-
-static const struct file_operations n7d_fops = {
+const struct file_operations n7d_fops = {
     .owner = THIS_MODULE,
     .open = n7d_open,
     .release = n7d_release,
