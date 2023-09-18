@@ -63,7 +63,7 @@ static ssize_t n7d_write(struct file * file, const char __user *buf, size_t coun
         tocopy -= copied;
     }
     data[tocopy] = 0;
-    printk(KERN_INFO "n7d: write %lu bytes, %s\n", tocopy, data);
+    printk(KERN_INFO "n7d: write %u bytes, %s\n", tocopy, data);
     return tocopy;
 }
 
