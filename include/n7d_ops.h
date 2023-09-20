@@ -1,6 +1,6 @@
 /**
  * 
- * Contains device operations (open, release, write)
+ * Contains N7D device operations (open, release, write)
  * 
  */
 
@@ -10,15 +10,17 @@
 #include <linux/kernel.h>
 #include <linux/fs.h>
 
-#define DATA_LEN_MAX (10)  /* Size of the device buffer TODO: change.  */
+#include "n7d_buffer.h"
+
+#define DATA_LEN_MAX (10)  /* Size of the device buffer TODO: remove.  */
 
 /**
- * @brief Open 
+ * @brief Open TODO:
  */
 int n7d_open(struct inode *, struct file *);
 
 /**
- * @brief Release
+ * @brief Release TODO:
  */
 int n7d_release(struct inode *, struct file *);
 
@@ -28,5 +30,7 @@ int n7d_release(struct inode *, struct file *);
  * @return Number of bytes successfully written.
  */
 ssize_t n7d_write(struct file *, const char __user *, size_t, loff_t *);
+
+// TODO: iocntl to send commands like CLEAR to clear the display
 
 #endif

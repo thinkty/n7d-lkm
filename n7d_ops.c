@@ -1,6 +1,6 @@
 /**
  * 
- * Defines the device operations
+ * Defines N7D device operations
  * 
  */
 
@@ -8,18 +8,22 @@
 
 int n7d_open(struct inode * inode, struct file * file)
 {
+    // TODO: initialize data buffer etc.
     printk(KERN_INFO "n7d: open");
     return 0;
 }
 
 int n7d_release(struct inode * inode, struct file * file)
 {
+    // TODO: free data buffer
     printk(KERN_INFO "n7d: release");
     return 0;
 }
 
 ssize_t n7d_write(struct file * file, const char __user * buf, size_t count, loff_t * offset)
 {
+    // TODO: check the characters before moving
+    // TODO: store the checked chars to data buffer
     char data[DATA_LEN_MAX+1];
     size_t tocopy = count < DATA_LEN_MAX ? count : DATA_LEN_MAX;
     size_t copied = copy_from_user(data, buf, tocopy);
@@ -30,4 +34,12 @@ ssize_t n7d_write(struct file * file, const char __user * buf, size_t count, lof
     data[tocopy] = 0;
     printk(KERN_INFO "n7d: write %u bytes, %s\n", tocopy, data);
     return tocopy;
+
+
+    // TODO:
+    /* Numerical check */
+    if (c < '0' || c > '9') {
+        err = -EINVAL;
+        return err;
+    }
 }

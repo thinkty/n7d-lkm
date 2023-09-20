@@ -1,5 +1,5 @@
 MODULE := n7d
-OBJECTS := main.o n7d_ops.o
+OBJECTS := n7d_buffer.o n7d_ops.o n7d_dev.o n7d_main.o
 
 obj-m += $(MODULE).o
 $(MODULE)-y := $(OBJECTS)
