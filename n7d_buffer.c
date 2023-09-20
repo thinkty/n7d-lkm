@@ -76,7 +76,7 @@ int buffer_putc(struct n7d_dev_buffer * buffer, char c)
     }
 
     // TODO: print contents of buffer to kernel for now
-    printk(KERN_INFO "n7d: putc() \"%c%c%c%c%c%c%c%c%c%c\"\n", buffer->data[0], buffer->data[1], buffer->data[2],buffer->data[3],buffer->data[4],buffer->data[5],buffer->data[6],buffer->data[7],buffer->data[8],buffer->data[9]);
-    
+    printk(KERN_INFO "n7d: putc(%c at %u) \"%c%c%c%c%c%c%c%c%c%c\"\n", c,buffer->in,buffer->data[0], buffer->data[1], buffer->data[2],buffer->data[3],buffer->data[4],buffer->data[5],buffer->data[6],buffer->data[7],buffer->data[8],buffer->data[9]);
+
     return 0;
 }

@@ -79,57 +79,40 @@ int n7d_release(struct inode * inode, struct file * filp)
 ssize_t n7d_write(struct file * filp, const char __user * buf, size_t count, loff_t * f_pos)
 {
     char tbuf[BUFFER_LEN] = {0};
-    ssize_t checked = 0;
-    ssize_t written = 0;
-    ssize_t remaining = count;
     size_t to_copy = 0;
     size_t not_copied = 0;
     int i = 0;
     int err = 0;
     struct n7d_dev * dev = (struct n7d_dev *) filp->private_data;
 
-    /* First loop to check user input */
-    while (checked < count) {
+    /* No matter the given number of bytes, only take by the size of the buffer */
+    to_copy = count < BUFFER_LEN ? count : BUFFER_LEN;
+    not_copied = copy_from_user(tbuf, buf, to_copy);
+    to_copy -= not_copied;
+    
+    /* Check that it's all numerical */
+    for (i = 0; i < to_copy; i++) {
 
-        /* Copy over the user input */
-        remaining = count - checked;
-        to_copy = remaining < BUFFER_LEN ? remaining : BUFFER_LEN;
-        not_copied = copy_from_user(tbuf, buf, to_copy);
-        to_copy -= not_copied;
-
-        /* Check that it's all numerical */
-        for (i = 0; i < to_copy; i++) {
-            if (tbuf[i] < '0' || tbuf[i] > '9') {
-                err = -EINVAL;
-                return err;
-            }
+        /* Allow space for testing purposes */
+        if (tbuf[i] == '\0') {
+            continue;
         }
 
-        checked += to_copy;
-    }
-
-    /* Second loop to actually write the user input to device buffer */
-    remaining = count;
-    while (written < count) {
-
-        /* Copy over the user input */
-        remaining = count - written;
-        to_copy = remaining < BUFFER_LEN ? remaining : BUFFER_LEN;
-        not_copied = copy_from_user(tbuf, buf, to_copy);
-        to_copy -= not_copied;
-
-        /* Write to device buffer */
-        for (i = 0; i < to_copy; i++) {
-            err = buffer_putc(&dev->buffer, tbuf[i]);
-            if (err < 0) {
-                return err;
-            }
+        if (tbuf[i] < '0' || tbuf[i] > '9') {
+            err = -EINVAL;
+            return err;
         }
-
-        written += to_copy;
     }
 
-    return written;
+    /* Write to device buffer */
+    for (i = 0; i < to_copy; i++) {
+        err = buffer_putc(&dev->buffer, tbuf[i]);
+        if (err < 0) {
+            return err;
+        }
+    }
+
+    return to_copy;
 }
 
 /**
