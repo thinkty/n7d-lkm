@@ -13,15 +13,13 @@
 #include <linux/slab.h>
 #include <linux/kobject.h>
 
-#include "include/n7d_dev.h"
+#include "include/n7d_device.h"
 
 MODULE_AUTHOR("Tae Yoon Kim");
 MODULE_LICENSE("GPL");
 
-#define DEVICE_COUNT (1) /* Single device for now */
-
-static int n7d_major = 0;
-static struct n7d_dev * n7d_devices = NULL;
+unsigned int n7d_major = 0;
+struct n7d_dev * n7d_devices = NULL;
 static struct class * n7d_class = NULL;
 
 /**
@@ -52,7 +50,7 @@ static void n7d_cleanup(int devices_count)
     }
 
     /* Unregister all the minor devices */
-    unregister_chrdev_region(MKDEV(n7d_major, 0), DEVICE_COUNT);
+    unregister_chrdev_region(MKDEV(n7d_major, 0), N7D_DEVICE_COUNT);
     return;
 }
 
@@ -93,7 +91,7 @@ static int __init n7d_init(void)
     int err = 0;
 
     /* Allocate the appropriate device major number and a set of minor numbers */
-    err = alloc_chrdev_region(&dev, 0, DEVICE_COUNT, DEVICE_NAME);
+    err = alloc_chrdev_region(&dev, 0, N7D_DEVICE_COUNT, N7D_DEVICE_NAME);
     if (err < 0) {
         printk(KERN_ERR "n7d: alloc_chrdev_region() failed\n");
         return err;
@@ -103,7 +101,7 @@ static int __init n7d_init(void)
     n7d_major = MAJOR(dev);
 
     /* Create device class for sysfs */
-    n7d_class = class_create(THIS_MODULE, DEVICE_NAME);
+    n7d_class = class_create(THIS_MODULE, N7D_DEVICE_NAME);
     if (IS_ERR(n7d_class)) {
         err = PTR_ERR(n7d_class);
         n7d_cleanup(0);
@@ -112,7 +110,7 @@ static int __init n7d_init(void)
     n7d_class->dev_uevent = n7d_uevent;
 
     /* Allocate the array of devices from kernel memory */
-    n7d_devices = (struct n7d_dev *) kzalloc(DEVICE_COUNT * sizeof(struct n7d_dev), GFP_KERNEL);
+    n7d_devices = (struct n7d_dev *) kzalloc(N7D_DEVICE_COUNT * sizeof(struct n7d_dev), GFP_KERNEL);
     if (n7d_devices == NULL) {
         err = -ENOMEM;
         n7d_cleanup(0);
@@ -120,7 +118,7 @@ static int __init n7d_init(void)
     }
 
     /* Initialize each device instances */
-    for (i = 0; i < DEVICE_COUNT; i++) {
+    for (i = 0; i < N7D_DEVICE_COUNT; i++) {
         err = n7d_device_init(n7d_class, &n7d_devices[i], n7d_major, i);
         if (err < 0) {
             n7d_cleanup(i);
@@ -137,7 +135,7 @@ static int __init n7d_init(void)
  */
 static void __exit n7d_exit(void)
 {
-    n7d_cleanup(DEVICE_COUNT);
+    n7d_cleanup(N7D_DEVICE_COUNT);
 
     printk(KERN_INFO "n7d: exit\n");
     return;
