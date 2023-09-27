@@ -14,10 +14,11 @@ static const struct file_operations n7d_fops = {
     .open = n7d_open,
     .release = n7d_release,
     .write = n7d_write,
+    .unlocked_ioctl = n7d_ioctl,
 };
 
 /**
- * @brief Open TODO:
+ * @brief Open device and set the appropriate device data
  * 
  * @param inode Pointer to the file containing device metadata
  * @param filp Pointer to the open file for the device
@@ -51,7 +52,9 @@ int n7d_open(struct inode * inode, struct file * filp)
 }
 
 /**
- * @brief Release
+ * @brief Release is called when the device file descriptor is closed. However,
+ * the deallocation of buffer and device related data structures is done in exit
+ * module since the display is persistent. 
  * 
  * @param inode Pointer to the file containing device metadata
  * @param filp Pointer to the open file for the device
@@ -63,6 +66,30 @@ int n7d_release(struct inode * inode, struct file * filp)
 	unsigned int mn = iminor(inode);
 
     printk(KERN_INFO "n7d: released %s%u\n", N7D_DEVICE_NAME, mn);
+    return 0;
+}
+
+/**
+ * @brief Handle ioctl requests (clear screen) to the driver
+ * 
+ * @param filp Pointer to the open file for the device
+ * @param cmd Ioctl command
+ * @param arg Arguments for the command
+ * 
+ * @returns 0 on success, less than 0 on error.
+ */
+ssize_t n7d_ioctl(struct file * filp, unsigned int cmd, unsigned long arg)
+{
+    switch (cmd) {
+        case N7D_CLR:
+            printk(KERN_INFO "n7d: Clear display\n");
+            // TODO: send a special (non-numerical) character through UART 
+            break;
+        
+        default:
+            break;
+    }
+
     return 0;
 }
 

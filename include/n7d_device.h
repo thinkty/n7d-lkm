@@ -14,11 +14,15 @@
 #include <linux/minmax.h>
 #include <linux/uaccess.h>
 #include <linux/mutex.h>
+#include <linux/ioctl.h>
 
 #include "n7d_buffer.h"
 
 #define N7D_DEVICE_NAME  "n7d"
 #define N7D_DEVICE_COUNT (1) /* Single device for now */
+
+/* IOCTL command - IO Write command to clear display */
+#define N7D_CLR _IOW('a', 1, int32_t)
 
 /* Defined in n7d_main.c */
 extern unsigned int n7d_major;
@@ -45,9 +49,9 @@ int n7d_open(struct inode *, struct file *);
 
 int n7d_release(struct inode *, struct file *);
 
-ssize_t n7d_write(struct file *, const char __user *, size_t, loff_t *);
+ssize_t n7d_ioctl(struct file *, unsigned int, unsigned long);
 
-// TODO: iocntl to send commands like CLEAR to clear the display
+ssize_t n7d_write(struct file *, const char __user *, size_t, loff_t *);
 
 /**
  * Device Initialization & Exit
