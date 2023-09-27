@@ -104,6 +104,13 @@ ssize_t n7d_write(struct file * filp, const char __user * buf, size_t count, lof
         }
     }
 
+    /* By being interruptible, when given any signal, the process will just
+    give up on acquiring the lock and return -EINTR. */
+    err = mutex_lock_interruptible(&dev->buf_mutex);
+    if (err < 0) {
+        return err;
+    }
+
     /* Write to device buffer */
     for (i = 0; i < to_copy; i++) {
         err = buffer_putc(&dev->buffer, tbuf[i]);
@@ -111,6 +118,8 @@ ssize_t n7d_write(struct file * filp, const char __user * buf, size_t count, lof
             return err;
         }
     }
+
+    mutex_unlock(&dev->buf_mutex);
 
     return to_copy;
 }
@@ -134,6 +143,7 @@ void n7d_device_destroy(struct class * class, struct n7d_dev * dev, int major, i
 
     /* Cleanup device data */
     buffer_del(&dev->buffer);
+    mutex_destroy(&dev->buf_mutex);
     cdev_del(&dev->cdev);
 
     device_destroy(class, number);
@@ -167,6 +177,9 @@ int n7d_device_init(struct class * class, struct n7d_dev * dev, int major, int m
         printk(KERN_ERR "n7d: buffer_init() failed\n");
         return err;
     }
+
+    /* Initialize buffer mutex */
+    mutex_init(&dev->buf_mutex);
 
     /* Initialize cdev structure */
     cdev_init(&dev->cdev, &n7d_fops);

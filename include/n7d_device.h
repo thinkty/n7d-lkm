@@ -13,6 +13,7 @@
 #include <linux/fs.h>
 #include <linux/minmax.h>
 #include <linux/uaccess.h>
+#include <linux/mutex.h>
 
 #include "n7d_buffer.h"
 
@@ -27,10 +28,12 @@ extern struct n7d_dev * n7d_devices;
  * struct n7d_dev - device specific data
  * 
  * @param buffer Device buffer for storing bytes temporarily
- * @param cdev 
+ * @param buf_mutex Mutex for the buffer
+ * @param cdev Character device
  */
 struct n7d_dev {
     struct n7d_dev_buffer buffer;
+    struct mutex buf_mutex;
     struct cdev cdev;
 };
 
