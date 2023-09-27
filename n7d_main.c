@@ -17,6 +17,8 @@
 
 MODULE_AUTHOR("Tae Yoon Kim");
 MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("Numerical 7-segment display driver");
+MODULE_VERSION("0:0.1");
 
 unsigned int n7d_major = 0;
 struct n7d_dev * n7d_devices = NULL;
