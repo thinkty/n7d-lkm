@@ -14,18 +14,17 @@
 #include <linux/minmax.h>
 #include <linux/uaccess.h>
 #include <linux/mutex.h>
-#include <linux/ioctl.h>
 #include <linux/kfifo.h>
 
-#include "n7d_buffer.h"
+#include "n7d_ioctl.h"
+
+// #include <linux/interrupt.h>
+// #include <linux/irq.h>
 
 #define N7D_DEVICE_NAME  "n7d"
 #define N7D_DEVICE_COUNT (1) /* Single device for now */
 #define N7D_DEVICE_FIFO_SIZE (256) /* Size of the kfifo circular buffer */
 // #define N7D_IRQ_NO (77) /* 32 ~ 127 can be used @see irq_vectors.h */
-
-/* IOCTL command - IO Write command to clear display */
-#define N7D_CLR _IOW('a', 1, int32_t)
 
 /* Defined in n7d_main.c */
 extern unsigned int n7d_major;

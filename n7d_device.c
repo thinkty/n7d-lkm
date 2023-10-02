@@ -87,7 +87,7 @@ ssize_t n7d_ioctl(struct file * filp, unsigned int cmd, unsigned long arg)
             break;
         
         default:
-            break;
+            return -EINVAL;
     }
 
     return 0;
