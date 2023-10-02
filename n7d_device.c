@@ -142,6 +142,7 @@ ssize_t n7d_write(struct file * filp, const char __user * buf, size_t count, lof
     for (i = 0; i < to_copy; i++) {
         err = buffer_putc(&dev->buffer, tbuf[i]);
         if (err < 0) {
+            mutex_unlock(&dev->buf_mutex);
             return err;
         }
     }
@@ -216,6 +217,8 @@ int n7d_device_init(struct class * class, struct n7d_dev * dev, int major, int m
     err = cdev_add(&dev->cdev, number, 1);
     if (err < 0) {
         printk(KERN_ERR "n7d: cdev_add() failed(%d) to add %s%d", err, N7D_DEVICE_NAME, minor);
+        mutex_destroy(&dev->buf_mutex);
+        buffer_del(&dev->buffer);
         return err;
     }
 
@@ -224,6 +227,8 @@ int n7d_device_init(struct class * class, struct n7d_dev * dev, int major, int m
     if (IS_ERR(device)) {
         err = PTR_ERR(device);
         printk(KERN_ERR "n7d: device_create() failed(%d) to add %s%d", err, N7D_DEVICE_NAME, minor);
+        mutex_destroy(&dev->buf_mutex);
+        buffer_del(&dev->buffer);
         cdev_del(&dev->cdev);
         return err;
     }
