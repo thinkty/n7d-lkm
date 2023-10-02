@@ -105,26 +105,20 @@ ssize_t n7d_ioctl(struct file * filp, unsigned int cmd, unsigned long arg)
  */
 ssize_t n7d_write(struct file * filp, const char __user * buf, size_t count, loff_t * f_pos)
 {
-    char tbuf[BUFFER_LEN] = {0};
+    char tbuf[N7D_DEVICE_FIFO_SIZE] = {0};
     size_t to_copy = 0;
     size_t not_copied = 0;
     int i = 0;
     int err = 0;
     struct n7d_dev * dev = (struct n7d_dev *) filp->private_data;
 
-    /* No matter the given number of bytes, only take by the size of the buffer */
-    to_copy = count < BUFFER_LEN ? count : BUFFER_LEN;
+    /* At maximum, the size of buffer */
+    to_copy = count < N7D_DEVICE_FIFO_SIZE ? count : N7D_DEVICE_FIFO_SIZE;
     not_copied = copy_from_user(tbuf, buf, to_copy);
     to_copy -= not_copied;
-    
+
     /* Check that it's all numerical */
     for (i = 0; i < to_copy; i++) {
-
-        /* Allow space for testing purposes */
-        if (tbuf[i] == '\0') {
-            continue;
-        }
-
         if (tbuf[i] < '0' || tbuf[i] > '9') {
             err = -EINVAL;
             return err;
@@ -138,14 +132,9 @@ ssize_t n7d_write(struct file * filp, const char __user * buf, size_t count, lof
         return err;
     }
 
-    /* Write to device buffer */
-    for (i = 0; i < to_copy; i++) {
-        err = buffer_putc(&dev->buffer, tbuf[i]);
-        if (err < 0) {
-            mutex_unlock(&dev->buf_mutex);
-            return err;
-        }
-    }
+    /* Depending on the buffer vacancy, it might write less than specified */
+    to_copy = kfifo_in(&dev->fifo, tbuf, to_copy);
+    mutex_unlock(&dev->buf_mutex);
 
     mutex_unlock(&dev->buf_mutex);
 
@@ -170,7 +159,7 @@ void n7d_device_destroy(struct class * class, struct n7d_dev * dev, int major, i
     }
 
     /* Cleanup device data */
-    buffer_del(&dev->buffer);
+    kfifo_free(&dev->fifo);
     mutex_destroy(&dev->buf_mutex);
     cdev_del(&dev->cdev);
 
@@ -200,9 +189,9 @@ int n7d_device_init(struct class * class, struct n7d_dev * dev, int major, int m
     }
 
     /* Initialize device buffer */
-    err = buffer_init(&dev->buffer);
-    if (err < 0) {
-        printk(KERN_ERR "n7d: buffer_init() failed\n");
+    err = kfifo_alloc(&dev->fifo, N7D_DEVICE_FIFO_SIZE, GFP_KERNEL);
+    if (err != 0) {
+        printk(KERN_ERR "n7d: kfifo_alloc() failed\n");
         return err;
     }
 
@@ -218,7 +207,7 @@ int n7d_device_init(struct class * class, struct n7d_dev * dev, int major, int m
     if (err < 0) {
         printk(KERN_ERR "n7d: cdev_add() failed(%d) to add %s%d", err, N7D_DEVICE_NAME, minor);
         mutex_destroy(&dev->buf_mutex);
-        buffer_del(&dev->buffer);
+        kfifo_free(&dev->fifo);
         return err;
     }
 
@@ -228,7 +217,7 @@ int n7d_device_init(struct class * class, struct n7d_dev * dev, int major, int m
         err = PTR_ERR(device);
         printk(KERN_ERR "n7d: device_create() failed(%d) to add %s%d", err, N7D_DEVICE_NAME, minor);
         mutex_destroy(&dev->buf_mutex);
-        buffer_del(&dev->buffer);
+        kfifo_free(&dev->fifo);
         cdev_del(&dev->cdev);
         return err;
     }
