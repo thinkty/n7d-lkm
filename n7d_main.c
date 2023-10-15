@@ -15,8 +15,8 @@
 
 #include "include/n7d_device.h"
 
-MODULE_AUTHOR("Tae Yoon Kim");
-MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Tae Yoon Kim the.thinkty@gmail.com");
+MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("Numerical 7-segment display driver");
 MODULE_VERSION("0:0.1");
 
@@ -123,7 +123,7 @@ static int __init n7d_init(void)
     for (i = 0; i < N7D_DEVICE_COUNT; i++) {
         err = n7d_device_init(n7d_class, &n7d_devices[i], n7d_major, i);
         if (err < 0) {
-            n7d_cleanup(i);
+            n7d_cleanup(i); /* Destroy all previous devices */
             return err;
         }
     }
