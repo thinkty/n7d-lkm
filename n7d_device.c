@@ -276,7 +276,12 @@ int n7d_device_init(struct class * class, struct n7d_dev * dev, int major, int m
         return -ENOMEM; /* However, there are multiple reasons to fail */
     }
 
+    printk(KERN_INFO "n7d: workqueue created\n");
+
     init_waitqueue_head(&dev->writer_waitq);
+
+    printk(KERN_INFO "n7d: writer waitqueue created\n");
+
     mutex_init(&dev->buf_mutex);
     cdev_init(&dev->cdev, &n7d_fops);
     dev->cdev.owner = THIS_MODULE;
