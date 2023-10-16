@@ -123,8 +123,6 @@ void n7d_work_func(struct work_struct * work)
 
         /* Wake up writer_waitq since new space is available */
         wake_up_interruptible(&dev->writer_waitq);
-    } else {
-        printk(KERN_INFO "n7d: buffer is empty\n");
     }
 
     // /* Sleep until there is something in fifo or the device is unloading */
