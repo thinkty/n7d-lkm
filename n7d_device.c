@@ -104,27 +104,50 @@ void n7d_work_func(struct work_struct * work)
     int err, byte;
     struct n7d_dev * dev = container_of(work, struct n7d_dev, n7d_work);
 
-    /* Sleep until there is something in fifo or the device is unloading */
-    err = wait_event_interruptible(dev->work_waitq,
-                                   dev->closing || !kfifo_is_empty(&dev->fifo));
-    if (err < 0 || dev->closing) {
-        /* If interrupted or woke up to close the device, stop the work */
+    if (dev->closing) {
+        printk(KERN_INFO "n7d: Stopping work queue since closing\n");
         return;
     }
 
-    /* Since there is only 1 actual HW per device to write to, no locks */
-    err = kfifo_get(&dev->fifo, &byte);
-    if (err == 0) {
-        printk(KERN_WARNING "n7d: kfifo_get() says empty although it shouldn't be\n");
-        queue_work(dev->n7d_workqueue, &dev->n7d_work);
-        return;
+    if (!kfifo_is_empty(&dev->fifo)) {
+        /* Since there is only 1 actual HW per device to write to, no locks */
+        err = kfifo_get(&dev->fifo, &byte);
+        if (err == 0) {
+            printk(KERN_WARNING "n7d: kfifo_get() says empty although it shouldn't be\n");
+            queue_work(dev->n7d_workqueue, &dev->n7d_work);
+            return;
+        }
+
+        // TODO: process the byte
+        printk(KERN_INFO "n7d: processing '%c'\n", byte);
+
+        /* Wake up writer_waitq since new space is available */
+        wake_up_interruptible(&dev->writer_waitq);
+    } else {
+        printk(KERN_INFO "n7d: buffer is empty\n");
     }
 
-    // TODO: process the byte
-    printk(KERN_INFO "n7d: processing '%c'\n", byte);
+    // /* Sleep until there is something in fifo or the device is unloading */
+    // err = wait_event_interruptible(dev->work_waitq,
+    //                                dev->closing || !kfifo_is_empty(&dev->fifo));
+    // if (err < 0 || dev->closing) {
+    //     /* If interrupted or woke up to close the device, stop the work */
+    //     return;
+    // }
 
-    /* Wake up writer_waitq since new space is available */
-    wake_up_interruptible(&dev->writer_waitq);
+    // /* Since there is only 1 actual HW per device to write to, no locks */
+    // err = kfifo_get(&dev->fifo, &byte);
+    // if (err == 0) {
+    //     printk(KERN_WARNING "n7d: kfifo_get() says empty although it shouldn't be\n");
+    //     queue_work(dev->n7d_workqueue, &dev->n7d_work);
+    //     return;
+    // }
+
+    // // TODO: process the byte
+    // printk(KERN_INFO "n7d: processing '%c'\n", byte);
+
+    // /* Wake up writer_waitq since new space is available */
+    // wake_up_interruptible(&dev->writer_waitq);
 
     // Self-requeueing work
     queue_work(dev->n7d_workqueue, &dev->n7d_work);
