@@ -217,7 +217,7 @@ ssize_t n7d_write(struct file * filp, const char __user * buf, size_t count, lof
     mutex_unlock(&dev->buf_mutex);
 
     /* Wake up work waitqueue since there are bytes available */
-    wake_up_interruptible(&dev->work_waitq);
+    // wake_up_interruptible(&dev->work_waitq);
 
     return to_copy;
 }
