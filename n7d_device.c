@@ -171,7 +171,7 @@ ssize_t n7d_write(struct file * filp, const char __user * buf, size_t count, lof
 
     /* Check in a loop since another writer may get to kfifo first. This could
     potentially be a thundering herd problem */
-    while (kfifo_is_full(&dev->fifo)) {
+    while (kfifo_is_full(&dev->fifo) && !dev->closing) {
         mutex_unlock(&dev->buf_mutex);
 
         /* If non-blocking, return immediately */
@@ -179,16 +179,24 @@ ssize_t n7d_write(struct file * filp, const char __user * buf, size_t count, lof
             return -EAGAIN;
         }
 
-        /* Sleep until space available or timeout or interrupt */
+        /* Sleep until space available, timeout, interrupt, or closing device */
         err = wait_event_interruptible_hrtimeout(dev->writer_waitq,
-            !kfifo_is_full(&dev->fifo), ms_to_ktime(N7D_DEVICE_TIMEOUT));
+            dev->closing || !kfifo_is_full(&dev->fifo),
+            ms_to_ktime(N7D_DEVICE_TIMEOUT));
         if (err < 0) {
             return err;
         }
+
         err = mutex_lock_interruptible(&dev->buf_mutex);
         if (err < 0) {
             return err;
         }
+    }
+
+    /* If closing device, discard the given bytes and return error */
+    if (dev->closing) {
+        mutex_unlock(&dev->buf_mutex);
+        return -ECANCELED;
     }
 
     /* Depending on the buffer vacancy, it might write less than specified */
@@ -218,13 +226,10 @@ void n7d_device_destroy(struct class * class, struct n7d_dev * dev, int major, i
         return;
     }
 
-    /* Wake up any sleeping processes */
-    wake_up_interruptible(&dev->writer_waitq);
-
     /* Mark as closing so new work will not be added */
     dev->closing = true;
-    wake_up_interruptible(&dev->work_waitq);
-    // TODO: does cancel_work_sync wake up sleeping work? If so, no need to wake_up_interruptible and closing 
+    wake_up_interruptible(&dev->writer_waitq);
+    wake_up_interruptible(&dev->work_waitq); 
 
     /* Cancel the remaining work, and wait for any remaining work */
     cancel_work_sync(&dev->n7d_work);
@@ -268,7 +273,7 @@ int n7d_device_init(struct class * class, struct n7d_dev * dev, int major, int m
         return err;
     }
 
-    /* Create work and workqueue for the device, and queue the work ASAP */
+    /* Create workqueue and waitqueues for the device to handle writing bytes */
     dev->n7d_workqueue = alloc_ordered_workqueue(N7D_DEVICE_WQ, 0);
     if (dev->n7d_workqueue == NULL) {
         printk(KERN_ERR "n7d: alloc_ordered_workqueue() failed to allocate workqueue");
@@ -276,6 +281,7 @@ int n7d_device_init(struct class * class, struct n7d_dev * dev, int major, int m
         return -ENOMEM; /* However, there are multiple reasons to fail */
     }
 
+    init_waitqueue_head(&dev->work_waitq);
     init_waitqueue_head(&dev->writer_waitq);
     mutex_init(&dev->buf_mutex);
     cdev_init(&dev->cdev, &n7d_fops);
