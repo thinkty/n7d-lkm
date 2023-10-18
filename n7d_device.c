@@ -104,48 +104,27 @@ void n7d_work_func(struct work_struct * work)
     int err, byte;
     struct n7d_dev * dev = container_of(work, struct n7d_dev, n7d_work);
 
-    if (dev->closing) {
-        printk(KERN_INFO "n7d: Stopping work queue since closing\n");
+    /* Sleep until there is something in fifo or the device is unloading */
+    err = wait_event_interruptible(dev->work_waitq,
+                                   dev->closing || !kfifo_is_empty(&dev->fifo));
+    if (err < 0 || dev->closing) {
+        /* If interrupted or woke up to close the device, stop the work */
         return;
     }
 
-    if (!kfifo_is_empty(&dev->fifo)) {
-        /* Since there is only 1 actual HW per device to write to, no locks */
-        err = kfifo_get(&dev->fifo, &byte);
-        if (err == 0) {
-            printk(KERN_WARNING "n7d: kfifo_get() says empty although it shouldn't be\n");
-            queue_work(dev->n7d_workqueue, &dev->n7d_work);
-            return;
-        }
-
-        // TODO: process the byte
-        printk(KERN_INFO "n7d: processing '%c'\n", byte);
-
-        /* Wake up writer_waitq since new space is available */
-        wake_up_interruptible(&dev->writer_waitq);
+    /* Since there is only 1 actual HW per device to write to, no locks */
+    err = kfifo_get(&dev->fifo, &byte);
+    if (err == 0) {
+        printk(KERN_WARNING "n7d: kfifo_get() says empty although it shouldn't be\n");
+        queue_work(dev->n7d_workqueue, &dev->n7d_work);
+        return;
     }
 
-    // /* Sleep until there is something in fifo or the device is unloading */
-    // err = wait_event_interruptible(dev->work_waitq,
-    //                                dev->closing || !kfifo_is_empty(&dev->fifo));
-    // if (err < 0 || dev->closing) {
-    //     /* If interrupted or woke up to close the device, stop the work */
-    //     return;
-    // }
+    // TODO: process the byte
+    printk(KERN_INFO "n7d: processing '%c'\n", byte);
 
-    // /* Since there is only 1 actual HW per device to write to, no locks */
-    // err = kfifo_get(&dev->fifo, &byte);
-    // if (err == 0) {
-    //     printk(KERN_WARNING "n7d: kfifo_get() says empty although it shouldn't be\n");
-    //     queue_work(dev->n7d_workqueue, &dev->n7d_work);
-    //     return;
-    // }
-
-    // // TODO: process the byte
-    // printk(KERN_INFO "n7d: processing '%c'\n", byte);
-
-    // /* Wake up writer_waitq since new space is available */
-    // wake_up_interruptible(&dev->writer_waitq);
+    /* Wake up writer_waitq since new space is available */
+    wake_up_interruptible(&dev->writer_waitq);
 
     // Self-requeueing work
     queue_work(dev->n7d_workqueue, &dev->n7d_work);
@@ -192,7 +171,7 @@ ssize_t n7d_write(struct file * filp, const char __user * buf, size_t count, lof
 
     /* Check in a loop since another writer may get to kfifo first. This could
     potentially be a thundering herd problem */
-    while (kfifo_is_full(&dev->fifo)) {
+    while (kfifo_is_full(&dev->fifo) && !dev->closing) {
         mutex_unlock(&dev->buf_mutex);
 
         /* If non-blocking, return immediately */
@@ -200,16 +179,24 @@ ssize_t n7d_write(struct file * filp, const char __user * buf, size_t count, lof
             return -EAGAIN;
         }
 
-        /* Sleep until space available or timeout or interrupt */
+        /* Sleep until space available, timeout, interrupt, or closing device */
         err = wait_event_interruptible_hrtimeout(dev->writer_waitq,
-            !kfifo_is_full(&dev->fifo), ms_to_ktime(N7D_DEVICE_TIMEOUT));
+            dev->closing || !kfifo_is_full(&dev->fifo),
+            ms_to_ktime(N7D_DEVICE_TIMEOUT));
         if (err < 0) {
             return err;
         }
+
         err = mutex_lock_interruptible(&dev->buf_mutex);
         if (err < 0) {
             return err;
         }
+    }
+
+    /* If closing device, discard the given bytes and return error */
+    if (dev->closing) {
+        mutex_unlock(&dev->buf_mutex);
+        return -ECANCELED;
     }
 
     /* Depending on the buffer vacancy, it might write less than specified */
@@ -217,7 +204,7 @@ ssize_t n7d_write(struct file * filp, const char __user * buf, size_t count, lof
     mutex_unlock(&dev->buf_mutex);
 
     /* Wake up work waitqueue since there are bytes available */
-    // wake_up_interruptible(&dev->work_waitq);
+    wake_up_interruptible(&dev->work_waitq);
 
     return to_copy;
 }
@@ -239,12 +226,10 @@ void n7d_device_destroy(struct class * class, struct n7d_dev * dev, int major, i
         return;
     }
 
-    /* Wake up any sleeping processes */
-    wake_up_interruptible(&dev->writer_waitq);
-
     /* Mark as closing so new work will not be added */
     dev->closing = true;
-    // wake_up_interruptible(&dev->work_waitq);
+    wake_up_interruptible(&dev->writer_waitq);
+    wake_up_interruptible(&dev->work_waitq);
     // TODO: does cancel_work_sync wake up sleeping work? If so, no need to wake_up_interruptible and closing 
 
     /* Cancel the remaining work, and wait for any remaining work */
@@ -289,7 +274,7 @@ int n7d_device_init(struct class * class, struct n7d_dev * dev, int major, int m
         return err;
     }
 
-    /* Create work and workqueue for the device, and queue the work ASAP */
+    /* Create workqueue and waitqueues for the device to handle writing bytes */
     dev->n7d_workqueue = alloc_ordered_workqueue(N7D_DEVICE_WQ, 0);
     if (dev->n7d_workqueue == NULL) {
         printk(KERN_ERR "n7d: alloc_ordered_workqueue() failed to allocate workqueue");
@@ -297,12 +282,8 @@ int n7d_device_init(struct class * class, struct n7d_dev * dev, int major, int m
         return -ENOMEM; /* However, there are multiple reasons to fail */
     }
 
-    printk(KERN_INFO "n7d: workqueue created\n");
-
+    init_waitqueue_head(&dev->work_waitq);
     init_waitqueue_head(&dev->writer_waitq);
-
-    printk(KERN_INFO "n7d: writer waitqueue created\n");
-
     mutex_init(&dev->buf_mutex);
     cdev_init(&dev->cdev, &n7d_fops);
     dev->cdev.owner = THIS_MODULE;
