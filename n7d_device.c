@@ -244,7 +244,7 @@ void n7d_device_destroy(struct class * class, struct n7d_dev * dev, int major, i
 
     /* Mark as closing so new work will not be added */
     dev->closing = true;
-    wake_up_interruptible(&dev->work_waitq);
+    // wake_up_interruptible(&dev->work_waitq);
     // TODO: does cancel_work_sync wake up sleeping work? If so, no need to wake_up_interruptible and closing 
 
     /* Cancel the remaining work, and wait for any remaining work */
