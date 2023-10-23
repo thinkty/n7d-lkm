@@ -26,6 +26,16 @@
 #define N7D_DEVICE_FIFO_SIZE (256) /* Size of the kfifo circular buffer */
 #define N7D_DEVICE_TIMEOUT (100) /* Time (ms) to wait until buffer has space */
 
+/**
+ * Configuration for the lower half of the device
+ * 
+ * @see https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#peripheral-addresses
+ * 
+ */
+#define N7D_PERF_BASE (0x3f000000) 
+#define N7D_GPIO_BASE (N7D_PERF_BASE + 0x200000)
+
+
 /* Defined in n7d_main.c */
 extern unsigned int n7d_major;
 extern struct n7d_dev * n7d_devices;

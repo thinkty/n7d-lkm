@@ -20,6 +20,18 @@ MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("Numerical 7-segment display driver");
 MODULE_VERSION("0:0.1");
 
+int n7d_baudrate = 38400;
+module_param(n7d_baudrate, int, 0);
+MODULE_PARM_DESC(n7d_baudrate, "\tBaudrate of the device (default=38400)");
+
+int n7d_tx_gpio = 27;
+module_param(n7d_tx_gpio, int, 0);
+MODULE_PARM_DESC(n7d_tx_gpio, "\tGPIO # for UART TX (default=27)");
+
+int n7d_rx_gpio = 17;
+module_param(n7d_rx_gpio, int, 0);
+MODULE_PARM_DESC(n7d_rx_gpio, "\tGPIO # for UART RX (default=17)");
+
 unsigned int n7d_major = 0;
 struct n7d_dev * n7d_devices = NULL;
 static struct class * n7d_class = NULL;
@@ -128,7 +140,7 @@ static int __init n7d_init(void)
         }
     }
 
-    printk(KERN_INFO "n7d: successful init\n");
+    printk(KERN_INFO "n7d: successful init with Baudrate=%d, TX=%d, RX=%d\n", n7d_baudrate, n7d_tx_gpio, n7d_rx_gpio);
     return 0;
 }
 
