@@ -8,10 +8,10 @@
         target-path = "/";
         __overlay__ {
             7_seg_display {
-                compatible = "n7d";       /* name of driver */
+                compatible = "n7d"; /* name of driver */
                 status = "okay";
-                n7d-gpios = <&gpio 17 0>, /* RX */
-                            <&gpio 27 1>; /* TX */
+                serial-gpios = <&gpio 17 0>, /* RX */
+                               <&gpio 27 1>; /* TX */
             };
         };
     };
