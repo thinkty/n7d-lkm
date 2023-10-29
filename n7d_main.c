@@ -58,7 +58,7 @@ static long n7d_ioctl(struct file * filp, unsigned int cmd, unsigned long arg);
  */
 static struct of_device_id n7d_dt_ids[] = {
     {
-        .compatible = "n7d\0",
+        .compatible = "n7d",
     },
     {},
 };
