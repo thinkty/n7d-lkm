@@ -7,12 +7,15 @@
 #include <linux/cdev.h>
 #include <linux/err.h>
 #include <linux/fs.h>
-#include <linux/gpio/driver.h>
+#include <linux/gpio/consumer.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/kfifo.h>
 #include <linux/module.h>
+#include <linux/mod_devicetable.h>
 #include <linux/mutex.h>
+#include <linux/of_device.h>
+#include <linux/platform_device.h>
 #include <linux/printk.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
@@ -21,57 +24,96 @@
 
 #include "n7d_ioctl.h"
 
-#define N7D_DEVICE_NAME      "n7d"
-#define N7D_DEVICE_COUNT     (1)
-#define N7D_DEVICE_WQ        "n7d-workqueue"
-#define N7D_DEVICE_FIFO_SIZE (256)
-#define N7D_DEVICE_TIMEOUT   (100)
+#define N7D_PLTFRM_DEVICE_NAME "n7d-platform"  
+#define N7D_DEVICE_NAME        "n7d"
+#define N7D_DEVICE_WORKQUEUE   "n7d-workqueue"
+#define N7D_DEVICE_FIFO_SIZE   (8)
+#define N7D_DEVICE_TIMEOUT     (100)
 
-/**
- * Configuration for the lower half of the device
- * 
- * @see https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#peripheral-addresses
- */
-#define N7D_PERI_BASE (0x3f000000) 
-#define N7D_GPIO_BASE (N7D_PERI_BASE + 0x200000)
+MODULE_AUTHOR("Tae Yoon Kim");
+MODULE_LICENSE("GPL v2");
+MODULE_DESCRIPTION("Numerical 7-segment display driver");
+MODULE_VERSION("0:0.1");
 
 static int n7d_baudrate = 38400;
 module_param(n7d_baudrate, int, 0);
 MODULE_PARM_DESC(n7d_baudrate, "\tBaudrate of the device (default=38400)");
 
-static int n7d_tx_gpio = 27;
-module_param(n7d_tx_gpio, int, 0);
-MODULE_PARM_DESC(n7d_tx_gpio, "\tGPIO # for UART TX (default=27)");
-
-static int n7d_rx_gpio = 17;
-module_param(n7d_rx_gpio, int, 0);
-MODULE_PARM_DESC(n7d_rx_gpio, "\tGPIO # for UART RX (default=17)");
-
-static unsigned int n7d_major = 0;
-static struct n7d_dev * n7d_devices = NULL;
-static struct class * n7d_class = NULL;
+/**
+ * Function prototypes for the platform driver
+ */
+static int n7d_dt_probe(struct platform_device *pdev);
+static int n7d_dt_remove(struct platform_device *pdev);
 
 /**
- * struct n7d_dev - device specific data
+ * Function prototypes for the char driver
+ */
+static int n7d_open(struct inode * inode, struct file * filp);
+static int n7d_release(struct inode * inode, struct file * filp);
+static ssize_t n7d_write(struct file * filp, const char __user * buf, size_t count, loff_t * f_pos);
+static long n7d_ioctl(struct file * filp, unsigned int cmd, unsigned long arg);
+
+/**
+ * Specifying the name of the device in device tree using the overlay
+ */
+static struct of_device_id n7d_dt_ids[] = {
+    {
+        .compatible = "n7d\0",
+    },
+    {},
+};
+MODULE_DEVICE_TABLE(of, n7d_dt_ids);
+
+/**
+ * N7D platform device operations given as function pointers
+ */
+static struct platform_driver n7d_platform_driver = {
+    .probe = n7d_dt_probe,
+    .remove = n7d_dt_remove,
+    .driver = {
+        .name = N7D_PLTFRM_DEVICE_NAME,
+        .of_match_table = n7d_dt_ids,
+    },
+};
+
+/**
+ * N7D device operations given as function pointers 
+ */
+static const struct file_operations n7d_fops = {
+    .owner = THIS_MODULE,
+    .open = n7d_open,
+    .release = n7d_release,
+    .write = n7d_write,
+    .unlocked_ioctl = n7d_ioctl,
+};
+
+/**
+ * n7d_device_data - device specific data
  * 
- * @param n7d_workqueue Queue to handle work to write the bytes to UART memory
- * @param n7d_work Work to handle sending each available byte to UART memory
+ * @param workqueue Queue to handle work to write the bytes to UART memory
+ * @param work Work to handle sending each available byte to UART memory
  * @param writer_waitq Queue to block writers when buffer is full
  * @param work_waitq Queue to block work functions until there is data in buffer
  * @param fifo Circular buffer for storing bytes
  * @param buf_mutex Mutex for the buffer
  * @param cdev Character device
+ * @param closing Used to stop works from self-queueing
+ * @param rx GPIO descriptor for receival
+ * @param tx GPIO descriptor for transmission
  */
-struct n7d_dev {
-    struct workqueue_struct * n7d_workqueue;
-    struct work_struct n7d_work;
+static struct {
+    struct workqueue_struct * workqueue;
+    struct work_struct work;
     wait_queue_head_t writer_waitq;
     wait_queue_head_t work_waitq;
     struct kfifo fifo;
     struct mutex buf_mutex;
     struct cdev cdev;
     bool closing;
-};
+    struct gpio_desc * rx;
+    struct gpio_desc * tx;
+} n7d_device_data;
+static unsigned int n7d_major = 0;
 
 /**
  * @brief Open device and set the appropriate device data
@@ -85,20 +127,15 @@ static int n7d_open(struct inode * inode, struct file * filp)
 {
     unsigned int major = imajor(inode);
     unsigned int minor = iminor(inode);
-    struct n7d_dev * dev = NULL;
 
     /* Check device numbers */
-    if (major != n7d_major || minor >= N7D_DEVICE_COUNT) {
+    if (major != n7d_major) {
         printk(KERN_WARNING "n7d: Device %s%u with major %u not found\n", N7D_DEVICE_NAME, minor, major);
         return -ENODEV;
     }
 
-    /* Assign the device to the file so that other fops can use it */
-    dev = &n7d_devices[minor];
-    filp->private_data = dev;
-
     /* Check device */
-    if (inode->i_cdev != &dev->cdev) {
+    if (inode->i_cdev != &n7d_device_data.cdev) {
         printk(KERN_WARNING "n7d: cdev does not match (internal error)\n");
         return -ENODEV;
     }
@@ -126,6 +163,84 @@ static int n7d_release(struct inode * inode, struct file * filp)
 }
 
 /**
+ * @brief Check user input and write to the device buffer.
+ * 
+ * @param filp Pointer to the open file for the device
+ * @param buf User-space buffer
+ * @param count Number of bytes to write
+ * @param f_pos Not used
+ * 
+ * @returns Number of bytes successfully written or a negative errno value.
+ */
+static ssize_t n7d_write(struct file * filp, const char __user * buf, size_t count, loff_t * f_pos)
+{
+    char tbuf[N7D_DEVICE_FIFO_SIZE] = {0};
+    size_t to_copy = 0;
+    size_t not_copied = 0;
+    int i = 0;
+    int err = 0;
+
+    /* At maximum, the size of buffer */
+    to_copy = count < N7D_DEVICE_FIFO_SIZE ? count : N7D_DEVICE_FIFO_SIZE;
+    not_copied = copy_from_user(tbuf, buf, to_copy);
+    to_copy -= not_copied;
+
+    /* Check that it's all numerical */
+    for (i = 0; i < to_copy; i++) {
+        if (tbuf[i] < '0' || tbuf[i] > '9') {
+            err = -EINVAL;
+            return err;
+        }
+    }
+
+    /* By being interruptible, when given any signal, the process will just
+    give up on acquiring the lock and return -EINTR. */
+    err = mutex_lock_interruptible(&n7d_device_data.buf_mutex);
+    if (err < 0) {
+        return err;
+    }
+
+    /* Check in a loop since another writer may get to kfifo first. This could
+    potentially be a thundering herd problem */
+    while (kfifo_is_full(&n7d_device_data.fifo) && !n7d_device_data.closing) {
+        mutex_unlock(&n7d_device_data.buf_mutex);
+
+        /* If non-blocking, return immediately */
+        if (filp->f_flags & O_NDELAY || filp->f_flags & O_NONBLOCK) {
+            return -EAGAIN;
+        }
+
+        /* Sleep until space available, timeout, interrupt, or closing device */
+        err = wait_event_interruptible_hrtimeout(n7d_device_data.writer_waitq,
+                                                 n7d_device_data.closing || !kfifo_is_full(&n7d_device_data.fifo),
+                                                 ms_to_ktime(N7D_DEVICE_TIMEOUT));
+        if (err < 0) {
+            return err;
+        }
+
+        err = mutex_lock_interruptible(&n7d_device_data.buf_mutex);
+        if (err < 0) {
+            return err;
+        }
+    }
+
+    /* If closing device, discard the given bytes and return error */
+    if (n7d_device_data.closing) {
+        mutex_unlock(&n7d_device_data.buf_mutex);
+        return -ECANCELED;
+    }
+
+    /* Depending on the buffer vacancy, it might write less than specified */
+    to_copy = kfifo_in(&n7d_device_data.fifo, tbuf, to_copy);
+    mutex_unlock(&n7d_device_data.buf_mutex);
+
+    /* Wake up work waitqueue since there are bytes available */
+    wake_up_interruptible(&n7d_device_data.work_waitq);
+
+    return to_copy;
+}
+
+/**
  * @brief Handle ioctl requests (clear screen) to the driver
  * 
  * @param filp Pointer to the open file for the device
@@ -134,7 +249,7 @@ static int n7d_release(struct inode * inode, struct file * filp)
  * 
  * @returns 0 on success, less than 0 on error.
  */
-static ssize_t n7d_ioctl(struct file * filp, unsigned int cmd, unsigned long arg)
+static long n7d_ioctl(struct file * filp, unsigned int cmd, unsigned long arg)
 {
     switch (cmd) {
         case N7D_CLR:
@@ -158,21 +273,20 @@ static ssize_t n7d_ioctl(struct file * filp, unsigned int cmd, unsigned long arg
 static void n7d_work_func(struct work_struct * work)
 {
     int err, byte;
-    struct n7d_dev * dev = container_of(work, struct n7d_dev, n7d_work);
 
     /* Sleep until there is something in fifo or the device is unloading */
-    err = wait_event_interruptible(dev->work_waitq,
-                                   dev->closing || !kfifo_is_empty(&dev->fifo));
-    if (err < 0 || dev->closing) {
+    err = wait_event_interruptible(n7d_device_data.work_waitq,
+                                   n7d_device_data.closing || !kfifo_is_empty(&n7d_device_data.fifo));
+    if (err < 0 || n7d_device_data.closing) {
         /* If interrupted or woke up to close the device, stop the work */
         return;
     }
 
     /* Since there is only 1 actual HW per device to write to, no locks */
-    err = kfifo_get(&dev->fifo, &byte);
+    err = kfifo_get(&n7d_device_data.fifo, &byte);
     if (err == 0) {
         printk(KERN_WARNING "n7d: kfifo_get() says empty although it shouldn't be\n");
-        queue_work(dev->n7d_workqueue, &dev->n7d_work);
+        queue_work(n7d_device_data.workqueue, &n7d_device_data.work);
         return;
     }
 
@@ -180,334 +294,134 @@ static void n7d_work_func(struct work_struct * work)
     printk(KERN_INFO "n7d: processing '%c'\n", byte);
 
     /* Wake up writer_waitq since new space is available */
-    wake_up_interruptible(&dev->writer_waitq);
+    wake_up_interruptible(&n7d_device_data.writer_waitq);
 
     // Self-requeueing work
-    queue_work(dev->n7d_workqueue, &dev->n7d_work);
+    queue_work(n7d_device_data.workqueue, &n7d_device_data.work);
 }
 
 /**
- * @brief Check user input and write to the device buffer.
+ * @brief Initialize the device by allocating its numbers (major, minor), and
+ * creating a character device, and filling the device data with relevant data
+ * structures.
  * 
- * @param filp Pointer to the open file for the device
- * @param buf User-space buffer
- * @param count Number of bytes to write
- * @param f_pos Not used
- * 
- * @returns Number of bytes successfully written or a negative errno value.
- */
-static ssize_t n7d_write(struct file * filp, const char __user * buf, size_t count, loff_t * f_pos)
-{
-    char tbuf[N7D_DEVICE_FIFO_SIZE] = {0};
-    size_t to_copy = 0;
-    size_t not_copied = 0;
-    int i = 0;
-    int err = 0;
-    struct n7d_dev * dev = (struct n7d_dev *) filp->private_data;
-
-    /* At maximum, the size of buffer */
-    to_copy = count < N7D_DEVICE_FIFO_SIZE ? count : N7D_DEVICE_FIFO_SIZE;
-    not_copied = copy_from_user(tbuf, buf, to_copy);
-    to_copy -= not_copied;
-
-    /* Check that it's all numerical */
-    for (i = 0; i < to_copy; i++) {
-        if (tbuf[i] < '0' || tbuf[i] > '9') {
-            err = -EINVAL;
-            return err;
-        }
-    }
-
-    /* By being interruptible, when given any signal, the process will just
-    give up on acquiring the lock and return -EINTR. */
-    err = mutex_lock_interruptible(&dev->buf_mutex);
-    if (err < 0) {
-        return err;
-    }
-
-    /* Check in a loop since another writer may get to kfifo first. This could
-    potentially be a thundering herd problem */
-    while (kfifo_is_full(&dev->fifo) && !dev->closing) {
-        mutex_unlock(&dev->buf_mutex);
-
-        /* If non-blocking, return immediately */
-        if (filp->f_flags & O_NDELAY || filp->f_flags & O_NONBLOCK) {
-            return -EAGAIN;
-        }
-
-        /* Sleep until space available, timeout, interrupt, or closing device */
-        err = wait_event_interruptible_hrtimeout(dev->writer_waitq,
-            dev->closing || !kfifo_is_full(&dev->fifo),
-            ms_to_ktime(N7D_DEVICE_TIMEOUT));
-        if (err < 0) {
-            return err;
-        }
-
-        err = mutex_lock_interruptible(&dev->buf_mutex);
-        if (err < 0) {
-            return err;
-        }
-    }
-
-    /* If closing device, discard the given bytes and return error */
-    if (dev->closing) {
-        mutex_unlock(&dev->buf_mutex);
-        return -ECANCELED;
-    }
-
-    /* Depending on the buffer vacancy, it might write less than specified */
-    to_copy = kfifo_in(&dev->fifo, tbuf, to_copy);
-    mutex_unlock(&dev->buf_mutex);
-
-    /* Wake up work waitqueue since there are bytes available */
-    wake_up_interruptible(&dev->work_waitq);
-
-    return to_copy;
-}
-
-
-/**
- * N7D device operations given as function pointers 
- */
-static const struct file_operations n7d_fops = {
-    .owner = THIS_MODULE,
-    .open = n7d_open,
-    .release = n7d_release,
-    .write = n7d_write,
-    .unlocked_ioctl = n7d_ioctl,
-};
-
-/**
- * @brief Free the data, cdev, and device for the given device.
- * 
- * @param class Pointer to the device class
- * @param dev Pointer to current device data
- * @param major Major device number
- * @param minor Minor device number
- */
-static void n7d_device_destroy(struct class * class, struct n7d_dev * dev, int major, int minor)
-{
-    dev_t number = MKDEV(major, minor);
-
-    if (dev == NULL || class == NULL) {
-        printk(KERN_ERR "n7d: n7d_device_destroy() failed\n");
-        return;
-    }
-
-    /* Mark as closing so new work will not be added */
-    dev->closing = true;
-    wake_up_interruptible(&dev->writer_waitq);
-    wake_up_interruptible(&dev->work_waitq); 
-
-    /* Cancel the remaining work, and wait for any remaining work */
-    cancel_work_sync(&dev->n7d_work);
-    flush_workqueue(dev->n7d_workqueue); /* Just in case */
-    destroy_workqueue(dev->n7d_workqueue);
-
-    /* Cleanup device data */
-    kfifo_free(&dev->fifo);
-    mutex_destroy(&dev->buf_mutex);
-    cdev_del(&dev->cdev);
-
-    device_destroy(class, number);
-    return;
-}
-
-/**
- * @brief Initialize the device data, add to kernel and user-space
- * 
- * @param class Pointer to the device class
- * @param dev Pointer to current device data
- * @param major Major device number
- * @param minor Minor device number
+ * @param pdev Platform device
  * 
  * @returns 0 on success, less than 0 on error.
  */
-static int n7d_device_init(struct class * class, struct n7d_dev * dev, int major, int minor)
+static int n7d_dt_probe(struct platform_device *pdev)
 {
+    dev_t dev_num;
     int err = 0;
-    dev_t number = MKDEV(major, minor);
-    struct device * device = NULL;
 
-    if (dev == NULL || class == NULL) {
-        printk(KERN_ERR "n7d: n7d_device_init() failed\n");
-        return -ENODEV;
+    /* Allocate the appropriate device major number and a set of minor numbers */
+    err = alloc_chrdev_region(&dev_num, 0, 1, N7D_DEVICE_NAME);
+    if (err < 0) {
+        printk(KERN_ERR "n7d: alloc_chrdev_region() failed\n");
+        return err;
     }
 
+    n7d_major = MAJOR(dev_num);
+
     /* Initialize device buffer */
-    err = kfifo_alloc(&dev->fifo, N7D_DEVICE_FIFO_SIZE, GFP_KERNEL);
+    err = kfifo_alloc(&n7d_device_data.fifo, N7D_DEVICE_FIFO_SIZE, GFP_KERNEL);
     if (err != 0) {
         printk(KERN_ERR "n7d: kfifo_alloc() failed\n");
         return err;
     }
 
     /* Create workqueue and waitqueues for the device to handle writing bytes */
-    dev->n7d_workqueue = alloc_ordered_workqueue(N7D_DEVICE_WQ, 0);
-    if (dev->n7d_workqueue == NULL) {
+    n7d_device_data.workqueue = alloc_ordered_workqueue(N7D_DEVICE_WORKQUEUE, 0);
+    if (n7d_device_data.workqueue == NULL) {
         printk(KERN_ERR "n7d: alloc_ordered_workqueue() failed to allocate workqueue");
-        kfifo_free(&dev->fifo);
+        kfifo_free(&n7d_device_data.fifo);
         return -ENOMEM; /* However, there are multiple reasons to fail */
     }
 
-    init_waitqueue_head(&dev->work_waitq);
-    init_waitqueue_head(&dev->writer_waitq);
-    mutex_init(&dev->buf_mutex);
-    cdev_init(&dev->cdev, &n7d_fops);
-    dev->cdev.owner = THIS_MODULE;
+    init_waitqueue_head(&n7d_device_data.work_waitq);
+    init_waitqueue_head(&n7d_device_data.writer_waitq);
+    mutex_init(&n7d_device_data.buf_mutex);
+    cdev_init(&n7d_device_data.cdev, &n7d_fops);
+    n7d_device_data.cdev.owner = THIS_MODULE;
 
     /* Add the device available operations to the kernel */
-    err = cdev_add(&dev->cdev, number, 1);
+    err = cdev_add(&n7d_device_data.cdev, dev_num, 1);
     if (err < 0) {
-        printk(KERN_ERR "n7d: cdev_add() failed(%d) to add %s%d", err, N7D_DEVICE_NAME, minor);
-        destroy_workqueue(dev->n7d_workqueue);
-        mutex_destroy(&dev->buf_mutex);
-        kfifo_free(&dev->fifo);
+        printk(KERN_ERR "n7d: cdev_add() failed(%d) to add %s0\n", err, N7D_DEVICE_NAME);
+        destroy_workqueue(n7d_device_data.workqueue);
+        mutex_destroy(&n7d_device_data.buf_mutex);
+        kfifo_free(&n7d_device_data.fifo);
         return err;
     }
 
-    /* Create the device to be visible to user-space */
-    device = device_create(class, NULL, number, NULL, "%s%d", N7D_DEVICE_NAME, minor);
-    if (IS_ERR(device)) {
-        err = PTR_ERR(device);
-        printk(KERN_ERR "n7d: device_create() failed(%d) to add %s%d", err, N7D_DEVICE_NAME, minor);
-        destroy_workqueue(dev->n7d_workqueue);
-        mutex_destroy(&dev->buf_mutex);
-        kfifo_free(&dev->fifo);
-        cdev_del(&dev->cdev);
-        return err;
+    /* Get the GPIO descriptors from the pin numbers */
+    n7d_device_data.rx = gpiod_get_index(&pdev->dev, "serial", 0, GPIOD_IN);
+    n7d_device_data.tx = gpiod_get_index(&pdev->dev, "serial", 1, GPIOD_OUT_HIGH);
+
+    if (!n7d_device_data.rx) {
+
     }
+    // TODO: 
 
     /* As the device is ready, queue work to start handling data if available */
-    dev->closing = false;
-    INIT_WORK(&dev->n7d_work, n7d_work_func);
-    queue_work(dev->n7d_workqueue, &dev->n7d_work);
+    n7d_device_data.closing = false;
+    INIT_WORK(&n7d_device_data.work, n7d_work_func);
+    queue_work(n7d_device_data.workqueue, &n7d_device_data.work);
 
+    printk(KERN_INFO "n7d: successful init with Baudrate=%d", n7d_baudrate);
     return 0;
 }
 
 /**
- * @brief Free the individual device data, device class, and the allocated device
- * minor numbers.
+ * @brief Free the device data, cdev, and the allocated device numbers.
  * 
- * @param devices_count Number of devices to destoy 
+ * @param pdev Platform device
  */
-static void n7d_cleanup(int devices_count)
+static int n7d_dt_remove(struct platform_device *pdev)
 {
-    int i = 0;
+    /* Mark as closing so new work will not be added */
+    n7d_device_data.closing = true;
+    wake_up_interruptible(&n7d_device_data.writer_waitq);
+    wake_up_interruptible(&n7d_device_data.work_waitq); 
 
-    /* Free the array of device data */
-    if (n7d_devices) {
+    /* Cancel the remaining work, and wait for any remaining work */
+    cancel_work_sync(&n7d_device_data.work);
+    flush_workqueue(n7d_device_data.workqueue); /* Just in case */
+    destroy_workqueue(n7d_device_data.workqueue);
 
-        /* Destroy individual devices */
-        for (i = 0; i < devices_count; i++) {
-            n7d_device_destroy(n7d_class, &n7d_devices[i], n7d_major, i);
-        }
+    /* Cleanup device data */
+    kfifo_free(&n7d_device_data.fifo);
+    mutex_destroy(&n7d_device_data.buf_mutex);
+    cdev_del(&n7d_device_data.cdev);
 
-        kfree(n7d_devices);
-        n7d_devices = NULL;
-    }
+    /* Unregister the device instances */
+    unregister_chrdev_region(MKDEV(n7d_major, 0), 1);
 
-    if (n7d_class) {
-        class_destroy(n7d_class);
-        n7d_class = NULL;
-    }
-
-    /* Unregister all the minor devices */
-    unregister_chrdev_region(MKDEV(n7d_major, 0), N7D_DEVICE_COUNT);
-    return;
-}
-
-
-/**
- * @brief Callback function for managing environment variables for the device.
- * Here, it is used to add the permissions for the device.
- * 
- * @param dev Pointer to the device
- * @param env Device's environment buffer structure
- * 
- * @returns 0 on success, -ENOMEM if no memory available.
- */
-static int n7d_uevent(struct device * dev, struct kobj_uevent_env * env)
-{
-    int err = 0;
-
-    /* Set the permissions as read-write for all */
-    err = add_uevent_var(env, "DEVMODE=%#o", 0666);
-    if (err < 0) {
-        printk(KERN_ERR "n7d: n7d_uevent() failed to set permission\n");
-        return err;
-    }
-
+    printk(KERN_INFO "n7d: exit\n");
     return 0;
 }
 
 /**
- * @brief Initialize the device by allocating its numbers (major, minor), and
- * creating a device class and its individual devices with its own data.
+ * @brief Register the platform driver to bind to the GPIO consumer device.
  * 
  * @returns 0 on success, less than 0 on error.
  */
 static int __init n7d_init(void)
 {
-    dev_t dev;
-    int i = 0;
-    int err = 0;
-
-    /* Allocate the appropriate device major number and a set of minor numbers */
-    err = alloc_chrdev_region(&dev, 0, N7D_DEVICE_COUNT, N7D_DEVICE_NAME);
+    int err = platform_driver_register(&n7d_platform_driver);
     if (err < 0) {
-        printk(KERN_ERR "n7d: alloc_chrdev_region() failed\n");
-        return err;
+        printk(KERN_ERR "n7d: platform_driver_register() failed\n");
     }
-
-    /* Save the device's major number */
-    n7d_major = MAJOR(dev);
-
-    /* Create device class for sysfs */
-    n7d_class = class_create(THIS_MODULE, N7D_DEVICE_NAME);
-    if (IS_ERR(n7d_class)) {
-        err = PTR_ERR(n7d_class);
-        n7d_cleanup(0);
-        return err;
-    }
-    n7d_class->dev_uevent = n7d_uevent;
-
-    /* Allocate the array of devices from kernel memory */
-    n7d_devices = (struct n7d_dev *) kzalloc(N7D_DEVICE_COUNT * sizeof(struct n7d_dev), GFP_KERNEL);
-    if (n7d_devices == NULL) {
-        err = -ENOMEM;
-        n7d_cleanup(0);
-        return err;
-    }
-
-    /* Initialize each device instances */
-    for (i = 0; i < N7D_DEVICE_COUNT; i++) {
-        err = n7d_device_init(n7d_class, &n7d_devices[i], n7d_major, i);
-        if (err < 0) {
-            n7d_cleanup(i); /* Destroy all previous devices */
-            return err;
-        }
-    }
-
-    printk(KERN_INFO "n7d: successful init with Baudrate=%d, TX=%d, RX=%d\n", n7d_baudrate, n7d_tx_gpio, n7d_rx_gpio);
-    return 0;
+    return err;
 }
 
 /**
- * @brief Cleanup the individual devices and class.
+ * @brief Unregister the platform driver
  */
 static void __exit n7d_exit(void)
 {
-    n7d_cleanup(N7D_DEVICE_COUNT);
-
-    printk(KERN_INFO "n7d: exit\n");
-    return;
+    platform_driver_unregister(&n7d_platform_driver);
 }
 
 module_init(n7d_init);
 module_exit(n7d_exit);
-
-MODULE_AUTHOR("Tae Yoon Kim");
-MODULE_LICENSE("GPL v2");
-MODULE_DESCRIPTION("Numerical 7-segment display driver");
-MODULE_VERSION("0:0.1");
