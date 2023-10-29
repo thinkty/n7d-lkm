@@ -9,3 +9,6 @@
 *.ko
 *.symvers
 *.order 
+
+# Device tree output
+*.dtbo
