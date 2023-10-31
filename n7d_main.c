@@ -402,6 +402,7 @@ DT_PROBE_GET_GPIO_TX:
 DT_PROBE_DEVICE_CREATE:
     cdev_del(&n7d_device_data.cdev);
 DT_PROBE_CDEV_ADD:
+    mutex_destroy(&n7d_device_data.buf_mutex);
     destroy_workqueue(n7d_device_data.workqueue);
 DT_PROBE_ALLOC_WQ:
     kfifo_free(&n7d_device_data.fifo);
@@ -421,28 +422,31 @@ DT_PROBE_DEV_EXISTS:
  */
 static int n7d_dt_remove(struct platform_device *pdev)
 {
+    /* Remove from user space */
+    device_destroy(n7d_class, MKDEV(n7d_major, 0));
+
+    /* Remove char device from kernel */
+    cdev_del(&n7d_device_data.cdev);
+
     /* Mark as closing so new work will not be added */
     n7d_device_data.closing = true;
     wake_up_interruptible(&n7d_device_data.writer_waitq);
     wake_up_interruptible(&n7d_device_data.work_waitq); 
 
     /* Cancel the remaining work, and wait for any remaining work */
+    mutex_destroy(&n7d_device_data.buf_mutex);
     cancel_work_sync(&n7d_device_data.work);
     flush_workqueue(n7d_device_data.workqueue); /* Just in case */
     destroy_workqueue(n7d_device_data.workqueue);
 
     /* Cleanup device data */
     kfifo_free(&n7d_device_data.fifo);
-    mutex_destroy(&n7d_device_data.buf_mutex);
+
+    /* Remove the device class */
+    class_destroy(n7d_class);
 
     /* Free the character device number */
     unregister_chrdev_region(MKDEV(n7d_major, 0), 1);
-
-    /* Remove from user space */
-    device_destroy(n7d_class, MKDEV(n7d_major, 0));
-
-    /* Remove char device from kernel */
-    cdev_del(&n7d_device_data.cdev);
 
     printk(KERN_INFO "n7d: exit\n");
     return 0;
