@@ -221,6 +221,7 @@ static void n7d_work_func(struct work_struct * work)
 {
     int err, byte;
     struct n7d_drvdata * drvdata = container_of(work, struct n7d_drvdata, transmit_work);
+    static int tmp = 0; // TODO: just to toggle
 
     /* Sleep until there is something in fifo or the device is unloading */
     err = wait_event_interruptible(drvdata->work_waitq,
@@ -239,8 +240,9 @@ static void n7d_work_func(struct work_struct * work)
     }
 
     // TODO: process the byte (just toggling for now)
-    printk(KERN_INFO "n7d: processing '%c'\n", byte);
-    gpiod_set_value(drvdata->tx, gpiod_get_value(drvdata->tx) == 0 ? 1 : 0);
+    printk(KERN_INFO "n7d: '%c', tmp=%d\n", byte, tmp);
+    tmp = tmp == 0 ? 1 : 0;
+    gpiod_set_value(drvdata->tx, tmp);
 
     /* Wake up writer_waitq since new space is available */
     wake_up_interruptible(&drvdata->writer_waitq);
@@ -270,6 +272,7 @@ static int n7d_dt_probe(struct platform_device *pdev)
     }
 
     /* Allocate driver data */
+    // TODO: move to device managed devm_kzalloc
     drvdata = (struct n7d_drvdata *) kzalloc(sizeof(struct n7d_drvdata), GFP_KERNEL);
     if (!drvdata) {
         printk(KERN_ERR "n7d: kzalloc() failed\n");
@@ -284,6 +287,7 @@ static int n7d_dt_probe(struct platform_device *pdev)
     }
 
     /* Get the GPIO descriptors from the pin numbers */
+    // TODO: move to device managed devm_gpiod_get
     drvdata->tx = gpiod_get(&pdev->dev, "serial", GPIOD_OUT_HIGH);
     if (IS_ERR(drvdata->tx)) {
         err = PTR_ERR(drvdata->tx);
