@@ -274,7 +274,7 @@ static void n7d_work_func(struct work_struct * work)
 
     // TODO: process the byte (just toggling for now)
     printk(KERN_INFO "n7d: processing '%c'\n", byte);
-    gpiod_set_value(&dev_data->tx, !gpiod_get_value(&dev_data->tx));
+    gpiod_set_value(dev_data->tx, !gpiod_get_value(dev_data->tx));
 
     /* Wake up writer_waitq since new space is available */
     wake_up_interruptible(&dev_data->writer_waitq);
