@@ -4,14 +4,28 @@
 / {
     compatible = "brcm,bcm2837";
 
+    /* Pin declaration for the GPIO controller */
     fragment@0 {
+        target = <&gpio>;
+        __overlay__ {
+            n7d_gpio: n7d_gpio {
+                brcm,pins = <0x1b>;      /* Pin 27 */
+                brcm,function = <0x01>;  /* Output */
+            };
+        };
+    };
+
+    /* Device to use the GPIO pin */
+    fragment@1 {
         target-path = "/";
         __overlay__ {
-            7_seg_display {
-                compatible = "n7d"; /* name of driver */
+            n7d: n7d {
+                compatible = "thinkty,n7d";
                 status = "okay";
-                serial-gpios = <&gpio 17 0>, /* RX */
-                               <&gpio 27 1>; /* TX */
+                exists;
+                pinctrl-names = "default";  /* Pin reserve */
+                pinctrl-0 = <&n7d_gpio>;
+                serial-gpios = <&gpio 27 GPIO_ACTIVE_HIGH>;
             };
         };
     };

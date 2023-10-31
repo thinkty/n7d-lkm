@@ -17,6 +17,7 @@
 #include <linux/module.h>
 #include <linux/mod_devicetable.h>
 #include <linux/mutex.h>
+#include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/printk.h>
@@ -27,26 +28,15 @@
 
 #include "n7d_ioctl.h"
 
-#define N7D_PLTFRM_DEVICE_NAME "n7d-platform"  
 #define N7D_DEVICE_NAME        "n7d"
 #define N7D_DEVICE_WORKQUEUE   "n7d-workqueue"
 #define N7D_DEVICE_FIFO_SIZE   (8)
 #define N7D_DEVICE_TIMEOUT     (100)
 
-MODULE_AUTHOR("Tae Yoon Kim");
-MODULE_LICENSE("GPL v2");
-MODULE_DESCRIPTION("Numerical 7-segment display driver");
-MODULE_VERSION("0:0.1");
 
 static int n7d_baudrate = 38400;
 module_param(n7d_baudrate, int, 0);
 MODULE_PARM_DESC(n7d_baudrate, "\tBaudrate of the device (default=38400)");
-
-/**
- * Function prototypes for the platform driver
- */
-static int n7d_dt_probe(struct platform_device *pdev);
-static int n7d_dt_remove(struct platform_device *pdev);
 
 /**
  * Function prototypes for the char driver
@@ -55,30 +45,6 @@ static int n7d_open(struct inode * inode, struct file * filp);
 static int n7d_release(struct inode * inode, struct file * filp);
 static ssize_t n7d_write(struct file * filp, const char __user * buf, size_t count, loff_t * f_pos);
 static long n7d_ioctl(struct file * filp, unsigned int cmd, unsigned long arg);
-
-/**
- * Specifying the name of the device in device tree using the overlay
- */
-static struct of_device_id n7d_dt_ids[] = {
-    {
-        .compatible = "n7d",
-    },
-    { /* end of list */ },
-};
-MODULE_DEVICE_TABLE(of, n7d_dt_ids);
-
-/**
- * N7D platform device operations given as function pointers
- */
-static struct platform_driver n7d_platform_driver = {
-    .probe = n7d_dt_probe,
-    .remove = n7d_dt_remove,
-    .driver = {
-        .name = N7D_PLTFRM_DEVICE_NAME,
-        .owner = THIS_MODULE,
-        .of_match_table = n7d_dt_ids,
-    },
-};
 
 /**
  * N7D device operations given as function pointers 
@@ -114,11 +80,10 @@ struct n7d_dd {
     struct mutex buf_mutex;
     struct cdev cdev;
     bool closing;
-    struct gpio_desc * rx;
     struct gpio_desc * tx;
 };
 
-static struct n7d_dd n7d_device_data;
+static struct n7d_dd n7d_device_data; // TODO: instead of global var, allocate
 static unsigned int n7d_major = 0;
 static struct class * n7d_class = NULL;
 static struct device * n7d_device = NULL;
@@ -307,8 +272,9 @@ static void n7d_work_func(struct work_struct * work)
         return;
     }
 
-    // TODO: process the byte
+    // TODO: process the byte (just toggling for now)
     printk(KERN_INFO "n7d: processing '%c'\n", byte);
+    gpiod_set_value(&dev_data->tx, !gpiod_get_value(&dev_data->tx));
 
     /* Wake up writer_waitq since new space is available */
     wake_up_interruptible(&dev_data->writer_waitq);
@@ -353,6 +319,13 @@ static int n7d_dt_probe(struct platform_device *pdev)
 {
     dev_t dev_num;
     int err = 0;
+
+    /* Check that the device exists before attaching device driver */
+    if (!device_property_present(&pdev->dev, "exists")) {
+        err = -ENODEV;
+        printk(KERN_ERR "n7d: device does not exist\n");
+        goto DT_PROBE_DEV_EXISTS;
+    }
 
     /* Allocate the appropriate device major number and a set of minor numbers */
     err = alloc_chrdev_region(&dev_num, 0, 1, N7D_DEVICE_NAME);
@@ -409,15 +382,12 @@ static int n7d_dt_probe(struct platform_device *pdev)
     }
 
     /* Get the GPIO descriptors from the pin numbers */
-    n7d_device_data.rx = devm_gpiod_get_index(&pdev->dev, "serial", 0, GPIOD_IN);
-    n7d_device_data.tx = devm_gpiod_get_index(&pdev->dev, "serial", 1, GPIOD_OUT_HIGH);
-
-    if (!n7d_device_data.rx) {
-        // err = 
-        goto DT_PROBE_GET_GPIO_RX;
+    n7d_device_data.tx = devm_gpiod_get(&pdev->dev, "serial", GPIOD_OUT_HIGH);
+    if (IS_ERR(n7d_device_data.tx)) {
+        err = PTR_ERR(n7d_device_data.tx);
+        printk(KERN_ERR "n7d: devm_gpiod_get() failed\n");
         goto DT_PROBE_GET_GPIO_TX;
     }
-    // TODO: 
 
     /* As the device is ready, queue work to start handling data if available */
     n7d_device_data.closing = false;
@@ -427,8 +397,6 @@ static int n7d_dt_probe(struct platform_device *pdev)
     printk(KERN_INFO "n7d: successful init with Baudrate=%d", n7d_baudrate);
     return 0;
 
-DT_PROBE_GET_GPIO_RX:
-    // TODO: since devm_ no need to un-get gpiod?
 DT_PROBE_GET_GPIO_TX:
     device_destroy(n7d_class, dev_num);
 DT_PROBE_DEVICE_CREATE:
@@ -442,6 +410,7 @@ DT_PROBE_KFIFO_ALLOC:
 DT_PROBE_CLS_CRT:
     unregister_chrdev_region(dev_num, 1);
 DT_PROBE_REG_CHRDEV:
+DT_PROBE_DEV_EXISTS:
     return err;
 }
 
@@ -457,12 +426,6 @@ static int n7d_dt_remove(struct platform_device *pdev)
     wake_up_interruptible(&n7d_device_data.writer_waitq);
     wake_up_interruptible(&n7d_device_data.work_waitq); 
 
-    /* Remove from user space */
-    device_destroy(n7d_class, MKDEV(n7d_major, 0));
-
-    /* Remove char device from kernel */
-    cdev_del(&n7d_device_data.cdev);
-
     /* Cancel the remaining work, and wait for any remaining work */
     cancel_work_sync(&n7d_device_data.work);
     flush_workqueue(n7d_device_data.workqueue); /* Just in case */
@@ -475,31 +438,42 @@ static int n7d_dt_remove(struct platform_device *pdev)
     /* Free the character device number */
     unregister_chrdev_region(MKDEV(n7d_major, 0), 1);
 
+    /* Remove from user space */
+    device_destroy(n7d_class, MKDEV(n7d_major, 0));
+
+    /* Remove char device from kernel */
+    cdev_del(&n7d_device_data.cdev);
+
     printk(KERN_INFO "n7d: exit\n");
     return 0;
 }
 
 /**
- * @brief Register the platform driver to bind to the GPIO consumer device.
- * 
- * @returns 0 on success, less than 0 on error.
+ * Specifying the name of the device in device tree using the overlay
  */
-static int __init n7d_init(void)
-{
-    int err = platform_driver_register(&n7d_platform_driver);
-    if (err < 0) {
-        printk(KERN_ERR "n7d: platform_driver_register() failed\n");
-    }
-    return err;
-}
+static struct of_device_id n7d_dt_ids[] = {
+    { .compatible = "thinkty,n7d", },
+    { /* end of list */ },
+};
+MODULE_DEVICE_TABLE(of, n7d_dt_ids);
 
 /**
- * @brief Unregister the platform driver
+ * N7D platform device operations given as function pointers
  */
-static void __exit n7d_exit(void)
-{
-    platform_driver_unregister(&n7d_platform_driver);
-}
+static struct platform_driver n7d_platform_driver = {
+    .probe = n7d_dt_probe,
+    .remove = n7d_dt_remove,
+    .driver = {
+        .name = N7D_DEVICE_NAME,
+        .owner = THIS_MODULE,
+        .of_match_table = of_match_ptr(n7d_dt_ids),
+    },
+};
 
-module_init(n7d_init);
-module_exit(n7d_exit);
+/* Macro for module init and exit */
+module_platform_driver(n7d_platform_driver);
+
+MODULE_AUTHOR("Tae Yoon Kim");
+MODULE_LICENSE("GPL v2");
+MODULE_DESCRIPTION("Numerical 7-segment display driver");
+MODULE_VERSION("0:0.1");
