@@ -53,6 +53,7 @@ struct n7d_drvdata {
     struct kfifo fifo;
     struct mutex buf_mutex;
     bool closing;
+    int somevalue; // TODO: just to check container_of is working
     struct miscdevice misc;
     struct gpio_desc * tx;
 };
@@ -102,7 +103,7 @@ static int n7d_release(struct inode * inode, struct file * filp)
 {
 	unsigned int mn = iminor(inode);
 
-    printk(KERN_INFO "n7d: released %s%u\n", N7D_DEVICE_NAME, mn); // TODO:
+    pr_info("n7d: released %s%u\n", N7D_DEVICE_NAME, mn); // TODO:
     return 0;
 }
 
@@ -124,6 +125,8 @@ static ssize_t n7d_write(struct file * filp, const char __user * buf, size_t cou
     int i = 0;
     int err = 0;
     struct n7d_drvdata * drvdata = container_of(filp->private_data, struct n7d_drvdata, misc);
+    // TODO: is this working?
+    pr_info("n7d: checking if container_of is working = %d\n", drvdata->somevalue);
 
     /* At maximum, the size of buffer */
     to_copy = count < N7D_DEVICE_FIFO_SIZE ? count : N7D_DEVICE_FIFO_SIZE;
@@ -200,7 +203,7 @@ static long n7d_ioctl(struct file * filp, unsigned int cmd, unsigned long arg)
 
     switch (cmd) {
         case N7D_CLR:
-            printk(KERN_INFO "n7d: Clear display\n");
+            pr_info("n7d: Clear display\n");
             // TODO: send a special (non-numerical) character
             break;
         
@@ -240,7 +243,7 @@ static void n7d_work_func(struct work_struct * work)
     }
 
     // TODO: process the byte (just toggling for now)
-    printk(KERN_INFO "n7d: '%c', tmp=%d\n", byte, tmp);
+    pr_info("n7d-work: '%c', tmp=%d\n", byte, tmp);
     tmp = tmp == 0 ? 1 : 0;
     gpiod_set_value(drvdata->tx, tmp);
 
@@ -267,33 +270,37 @@ static int n7d_dt_probe(struct platform_device *pdev)
 
     /* Check that the device exists before attaching device driver */
     if (!device_property_present(&pdev->dev, "exists")) {
-        printk(KERN_ERR "n7d: device does not exist\n");
+        pr_err("n7d: device does not exist\n");
         return -ENODEV;
     }
+    pr_info("n7d: device exists\n");
 
     /* Allocate driver data */
     // TODO: move to device managed devm_kzalloc
     drvdata = (struct n7d_drvdata *) kzalloc(sizeof(struct n7d_drvdata), GFP_KERNEL);
     if (!drvdata) {
-        printk(KERN_ERR "n7d: kzalloc() failed\n");
+        pr_err("n7d: kzalloc() failed\n");
         return -ENOMEM;
     }
+    pr_info("n7d: allocated device driver data\n");
 
     /* Allocate buffer */
     err = kfifo_alloc(&drvdata->fifo, N7D_DEVICE_FIFO_SIZE, GFP_KERNEL);
     if (err != 0) {
-        printk(KERN_ERR "n7d: kfifo_alloc() failed\n");
+        pr_err("n7d: kfifo_alloc() failed\n");
         goto DT_PROBE_KFIFO;
     }
+    pr_info("n7d: allocated buffer\n");
 
     /* Get the GPIO descriptors from the pin numbers */
     // TODO: move to device managed devm_gpiod_get
     drvdata->tx = gpiod_get(&pdev->dev, "serial", GPIOD_OUT_HIGH);
     if (IS_ERR(drvdata->tx)) {
         err = PTR_ERR(drvdata->tx);
-        printk(KERN_ERR "n7d: devm_gpiod_get() failed\n");
+        pr_err("n7d: devm_gpiod_get() failed\n");
         goto DT_PROBE_GET_GPIO_TX;
     }
+    pr_info("n7d: requested gpio for serial\n");
 
     /* Initialize various queues and buffer mutex */
     init_waitqueue_head(&drvdata->work_waitq);
@@ -303,28 +310,34 @@ static int n7d_dt_probe(struct platform_device *pdev)
     /* Create workqueue and waitqueues for the device to handle writing bytes */
     drvdata->workqueue = alloc_ordered_workqueue(N7D_DEVICE_WORKQUEUE, 0);
     if (!drvdata->workqueue) {
-        printk(KERN_ERR "n7d: alloc_ordered_workqueue() failed to allocate workqueue");
+        pr_err("n7d: alloc_ordered_workqueue() failed to allocate workqueue");
         err = -ENOMEM; /* However, there are multiple reasons to fail */
         goto DT_PROBE_ALLOC_WQ;
     }
+    pr_info("n7d: allocated workqueue\n");
 
     /* Make the device available to the kernel & user */
     err = misc_register(&n7d_misc_device);
     if (err < 0) {
-        printk(KERN_ERR "n7d: misc_register() failed\n");
+        pr_err("n7d: misc_register() failed\n");
         goto DT_PROBE_MISC_REG;
     }
     drvdata->misc = n7d_misc_device;
+    pr_info("n7d: registered misc device for file IO\n");
 
     /* As the device is ready, queue work to start handling data if available */
     drvdata->closing = false;
     INIT_WORK(&drvdata->transmit_work, n7d_work_func);
     queue_work(drvdata->workqueue, &drvdata->transmit_work);
+    pr_info("n7d: initialized and queued transmission work\n");
 
     /* Set the driver data to the platform device and misc device */
     dev_set_drvdata(&pdev->dev, drvdata);
 
-    printk(KERN_INFO "n7d: successful init with Baudrate=%d", n7d_baudrate);
+    // TODO: just to check container_of is working
+    drvdata->somevalue = 594728; // some specific meaningless value
+
+    pr_info("n7d: successful init with Baudrate=%d", n7d_baudrate);
     return 0;
 
 DT_PROBE_MISC_REG:
@@ -348,7 +361,7 @@ static int n7d_dt_remove(struct platform_device *pdev)
 {
     struct n7d_drvdata * drvdata = dev_get_drvdata(&pdev->dev);
     if (!drvdata) {
-        printk(KERN_ERR "n7d: driver data does not exist\n");
+        pr_err("n7d: driver data does not exist\n");
         return -ENODATA;
     }
 
@@ -371,7 +384,7 @@ static int n7d_dt_remove(struct platform_device *pdev)
     kfifo_free(&drvdata->fifo);
     kfree(drvdata);
 
-    printk(KERN_INFO "n7d: exit\n");
+    pr_info("n7d: exit\n");
     return 0;
 }
 
