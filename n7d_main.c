@@ -129,6 +129,8 @@ static ssize_t n7d_write(struct file * filp, const char __user * buf, size_t cou
     // TODO: is this working?
     pr_info("n7d: checking if container_of is working = %d\n", drvdata->somevalue);
 
+    return count;
+
     /* At maximum, the size of buffer */
     to_copy = count < N7D_DEVICE_FIFO_SIZE ? count : N7D_DEVICE_FIFO_SIZE;
     not_copied = copy_from_user(tbuf, buf, to_copy);
