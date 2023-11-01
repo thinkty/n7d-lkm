@@ -42,7 +42,7 @@
  * @param fifo Circular buffer for storing bytes
  * @param buf_mutex Mutex for the buffer
  * @param closing Used to stop works from self-queueing
- * @param misc Used for getting drvdata using container_of
+ * @param miscdev Used for getting drvdata using container_of
  * @param tx GPIO descriptor for transmission
  */
 struct n7d_drvdata {
@@ -54,7 +54,7 @@ struct n7d_drvdata {
     struct mutex buf_mutex;
     bool closing;
     int somevalue; // TODO: just to check container_of is working
-    struct miscdevice misc;
+    struct miscdevice miscdev;
     struct gpio_desc * tx;
 };
 
@@ -81,14 +81,17 @@ static struct file_operations n7d_fops = {
 };
 
 /**
- * N7D misc. device description
+ * @brief Get the driver data from the given file.
+ * 
+ * @param filp Pointer to the open file for the device
+ * 
+ * @returns Device driver data
  */
-static struct miscdevice n7d_misc_device = {
-    .minor = MISC_DYNAMIC_MINOR,
-    .name = N7D_DEVICE_NAME,
-    .fops = &n7d_fops,
-    .mode = S_IRUGO | S_IWUGO,
-};
+static inline struct n7d_drvdata * get_drvdata(struct file * filp)
+{
+    struct miscdevice * dev = filp->private_data;
+    return container_of(dev, struct n7d_drvdata, miscdev);
+}
 
 /**
  * @brief Release is called when the device file descriptor is closed. However,
@@ -125,7 +128,7 @@ static ssize_t n7d_write(struct file * filp, const char __user * buf, size_t cou
     size_t not_copied = 0;
     int i = 0;
     int err = 0;
-    struct n7d_drvdata * drvdata = container_of(filp->private_data, struct n7d_drvdata, misc);
+    struct n7d_drvdata * drvdata = get_drvdata(filp);
     // TODO: is this working?
     pr_info("n7d: checking if container_of is working = %d\n", drvdata->somevalue);
 
@@ -202,7 +205,7 @@ static ssize_t n7d_write(struct file * filp, const char __user * buf, size_t cou
  */
 static long n7d_ioctl(struct file * filp, unsigned int cmd, unsigned long arg)
 {
-    // struct n7d_drvdata * drvdata = container_of(filp->private_data, struct n7d_drvdata, misc);
+    // struct n7d_drvdata * drvdata = get_drvdata(filp);
 
     switch (cmd) {
         case N7D_CLR:
@@ -226,8 +229,11 @@ static long n7d_ioctl(struct file * filp, unsigned int cmd, unsigned long arg)
 static void n7d_work_func(struct work_struct * work)
 {
     int err, byte;
-    struct n7d_drvdata * drvdata = container_of(work, struct n7d_drvdata, transmit_work);
     static int tmp = 0; // TODO: just to toggle
+    struct n7d_drvdata * drvdata = container_of(work, struct n7d_drvdata, transmit_work);
+
+    // TODO: check that drvdata is valid
+    pr_info("n7d-work: checking if container_of is working = %d\n", drvdata->somevalue);
 
     /* Sleep until there is something in fifo or the device is unloading */
     err = wait_event_interruptible(drvdata->work_waitq,
@@ -240,7 +246,7 @@ static void n7d_work_func(struct work_struct * work)
     /* Since there is only 1 actual HW per device to write to, no locks */
     err = kfifo_get(&drvdata->fifo, &byte);
     if (err == 0) {
-        printk(KERN_WARNING "n7d: kfifo_get() says empty although it shouldn't be\n");
+        printk(KERN_WARNING "n7d-work: kfifo_get() says empty although it shouldn't be\n");
         queue_work(drvdata->workqueue, &drvdata->transmit_work);
         return;
     }
@@ -320,12 +326,15 @@ static int n7d_dt_probe(struct platform_device *pdev)
     pr_info("n7d: allocated workqueue\n");
 
     /* Make the device available to the kernel & user */
-    err = misc_register(&n7d_misc_device);
+    drvdata->miscdev.minor = MISC_DYNAMIC_MINOR;
+    drvdata->miscdev.name = N7D_DEVICE_NAME;
+    drvdata->miscdev.fops = &n7d_fops;
+    drvdata->miscdev.mode = S_IRUGO | S_IWUGO;
+    err = misc_register(&drvdata->miscdev);
     if (err < 0) {
         pr_err("n7d: misc_register() failed\n");
         goto DT_PROBE_MISC_REG;
     }
-    drvdata->misc = n7d_misc_device;
     pr_info("n7d: registered misc device for file IO\n");
 
     /* As the device is ready, queue work to start handling data if available */
@@ -369,7 +378,7 @@ static int n7d_dt_remove(struct platform_device *pdev)
     }
 
     /* Unregister misc device */
-    misc_deregister(&n7d_misc_device);
+    misc_deregister(&drvdata->miscdev);
 
     /* Mark as closing so new work will not be added. */
     drvdata->closing = true;
