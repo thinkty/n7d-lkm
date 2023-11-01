@@ -87,6 +87,7 @@ static struct miscdevice n7d_misc_device = {
     .minor = MISC_DYNAMIC_MINOR,
     .name = N7D_DEVICE_NAME,
     .fops = &n7d_fops,
+    .mode = S_IRUGO | S_IWUGO,
 };
 
 /**
