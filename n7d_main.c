@@ -53,7 +53,6 @@ struct n7d_drvdata {
     struct kfifo fifo;
     struct mutex buf_mutex;
     bool closing;
-    int somevalue; // TODO: just to check container_of is working
     struct miscdevice miscdev;
     struct gpio_desc * tx;
 };
@@ -129,8 +128,6 @@ static ssize_t n7d_write(struct file * filp, const char __user * buf, size_t cou
     int i = 0;
     int err = 0;
     struct n7d_drvdata * drvdata = get_drvdata(filp);
-    // TODO: is this working?
-    pr_info("n7d: checking if container_of is working = %d\n", drvdata->somevalue);
 
     /* At maximum, the size of buffer */
     to_copy = count < N7D_DEVICE_FIFO_SIZE ? count : N7D_DEVICE_FIFO_SIZE;
@@ -229,9 +226,6 @@ static void n7d_work_func(struct work_struct * work)
     int err, byte;
     static int tmp = 0; // TODO: just to toggle
     struct n7d_drvdata * drvdata = container_of(work, struct n7d_drvdata, transmit_work);
-
-    // TODO: check that drvdata is valid
-    pr_info("n7d-work: checking if container_of is working = %d\n", drvdata->somevalue);
 
     /* Sleep until there is something in fifo or the device is unloading */
     err = wait_event_interruptible(drvdata->work_waitq,
@@ -343,9 +337,6 @@ static int n7d_dt_probe(struct platform_device *pdev)
 
     /* Set the driver data to the platform device and misc device */
     dev_set_drvdata(&pdev->dev, drvdata);
-
-    // TODO: just to check container_of is working
-    drvdata->somevalue = 594728; // some specific meaningless value
 
     pr_info("n7d: successful init with Baudrate=%d", n7d_baudrate);
     return 0;
