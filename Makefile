@@ -16,6 +16,6 @@ modules_install:
 
 clean:
 	$(MAKE) -C $(KERNEL_SRC) M=$(MODULE_SRC) clean
-	rm $(DT_OVERLAY).dtbo
+	rm -f $(DT_OVERLAY).dtbo
 
 .PHONY: default clean
