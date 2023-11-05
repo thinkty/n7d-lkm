@@ -349,6 +349,7 @@ static int n7d_dt_probe(struct platform_device *pdev)
         pr_err("n7d: devm_gpiod_get() failed\n");
         goto DT_PROBE_GET_GPIO_TX;
     }
+    gpiod_set_value(drvdata->tx, 1); /* Set as stop bit */
     pr_info("n7d: requested gpio for serial\n");
 
     /* Initialize various queues and buffer mutex */
