@@ -295,6 +295,7 @@ static void n7d_work_func(struct work_struct * work)
     }
 
     /* Start timer to bit-bang (send the bits of byte) */
+    pr_info("n7d-work: Sending %c\n", drvdata->byte);
     hrtimer_start(&drvdata->timer, drvdata->delay, HRTIMER_MODE_REL);
 
     /* Wake up writer_waitq since new space is available */
