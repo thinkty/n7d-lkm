@@ -287,12 +287,12 @@ static void n7d_work_func(struct work_struct * work)
     }
 
     /* Sleep until the previous timer has stopped (previous byte sent) */
-    err = wait_event_interruptible(drvdata->work_waitq,
-                                   drvdata->closing || !hrtimer_active(&drvdata->timer));
-    if (err < 0 || drvdata->closing) {
-        /* If interrupted or woke up to close the device, stop the work */
-        return;
-    }
+    // err = wait_event_interruptible(drvdata->work_waitq,
+    //                                drvdata->closing || !hrtimer_active(&drvdata->timer));
+    // if (err < 0 || drvdata->closing) {
+    //     /* If interrupted or woke up to close the device, stop the work */
+    //     return;
+    // }
 
     /* Start timer to bit-bang (send the bits of byte) */
     pr_info("n7d-work: Sending %c\n", drvdata->byte);
