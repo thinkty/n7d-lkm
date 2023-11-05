@@ -106,7 +106,7 @@ static int n7d_release(struct inode * inode, struct file * filp)
 {
 	unsigned int mn = iminor(inode);
 
-    pr_info("n7d: released %s%u\n", N7D_DEVICE_NAME, mn); // TODO:
+    pr_info("n7d: released %s%u\n", N7D_DEVICE_NAME, mn);
     return 0;
 }
 
@@ -276,9 +276,8 @@ static int n7d_dt_probe(struct platform_device *pdev)
     }
     pr_info("n7d: device exists\n");
 
-    /* Allocate driver data */
-    // TODO: move to device managed devm_kzalloc
-    drvdata = (struct n7d_drvdata *) kzalloc(sizeof(struct n7d_drvdata), GFP_KERNEL);
+    /* Allocate driver (zero-ed) data */
+    drvdata = devm_kzalloc(&pdev->dev, sizeof(struct n7d_drvdata), GFP_KERNEL);
     if (!drvdata) {
         pr_err("n7d: kzalloc() failed\n");
         return -ENOMEM;
@@ -294,8 +293,7 @@ static int n7d_dt_probe(struct platform_device *pdev)
     pr_info("n7d: allocated buffer\n");
 
     /* Get the GPIO descriptors from the pin numbers */
-    // TODO: move to device managed devm_gpiod_get
-    drvdata->tx = gpiod_get(&pdev->dev, "serial", GPIOD_OUT_HIGH);
+    drvdata->tx = devm_gpiod_get(&pdev->dev, "serial", GPIOD_OUT_HIGH);
     if (IS_ERR(drvdata->tx)) {
         err = PTR_ERR(drvdata->tx);
         pr_err("n7d: devm_gpiod_get() failed\n");
@@ -345,11 +343,9 @@ DT_PROBE_MISC_REG:
     destroy_workqueue(drvdata->workqueue);
 DT_PROBE_ALLOC_WQ:
     mutex_destroy(&drvdata->buf_mutex);
-    gpiod_put(drvdata->tx);
 DT_PROBE_GET_GPIO_TX:
     kfifo_free(&drvdata->fifo);
 DT_PROBE_KFIFO:
-    kfree(drvdata);
     return err;
 }
 
@@ -381,9 +377,7 @@ static int n7d_dt_remove(struct platform_device *pdev)
 
     /* Cleanup driver data */
     mutex_destroy(&drvdata->buf_mutex);
-    gpiod_put(drvdata->tx);
     kfifo_free(&drvdata->fifo);
-    kfree(drvdata);
 
     pr_info("n7d: exit\n");
     return 0;
