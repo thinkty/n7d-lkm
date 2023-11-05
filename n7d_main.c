@@ -8,10 +8,12 @@
 #include <linux/err.h>
 #include <linux/fs.h>
 #include <linux/gpio/consumer.h>
+#include <linux/hrtimer.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/kfifo.h>
 #include <linux/kobject.h>
+#include <linux/ktime.h>
 #include <linux/miscdevice.h>
 #include <linux/module.h>
 #include <linux/mod_devicetable.h>
@@ -40,10 +42,13 @@
  * @param writer_waitq Queue to block writers when buffer is full
  * @param work_waitq Queue to block work functions until there is data in buffer
  * @param fifo Circular buffer for storing bytes
+ * @param byte Current byte to be sent via serial
  * @param buf_mutex Mutex for the buffer
  * @param closing Used to stop works from self-queueing
  * @param miscdev Used for getting drvdata using container_of
  * @param tx GPIO descriptor for transmission
+ * @param timer High resolution timer to handle bit-banging
+ * @param delay Nanoseconds before sending the next "bit" (based on baudrate)
  */
 struct n7d_drvdata {
     struct workqueue_struct * workqueue;
@@ -51,10 +56,13 @@ struct n7d_drvdata {
     wait_queue_head_t writer_waitq;
     wait_queue_head_t work_waitq;
     struct kfifo fifo;
+    unsigned int byte;
     struct mutex buf_mutex;
     bool closing;
     struct miscdevice miscdev;
     struct gpio_desc * tx;
+    struct hrtimer timer;
+    ktime_t delay;
 };
 
 static int n7d_baudrate = 38400;
@@ -216,6 +224,42 @@ static long n7d_ioctl(struct file * filp, unsigned int cmd, unsigned long arg)
 }
 
 /**
+ * @brief Callback function to be called for the hrtimer to handle bit-banging.
+ * Since this function runs in atomic context (interrupts disabled), it is very
+ * important that it does not sleep or trigger a resched.
+ * 
+ * @param timer The hrtimer that called this callback function
+ * 
+ * @returns HRTIMER_RESTART until all the bits (start bit, data (8), and stop
+ * bit (1)) are sent. Then, HRTIMER_STOP.
+ */
+static enum hrtimer_restart n7d_timer_callback(struct hrtimer * timer)
+{
+    static unsigned int bit = -1;
+    struct n7d_drvdata * drvdata = container_of(timer, struct n7d_drvdata, timer);
+
+    /* Start bit */
+    if (bit == -1) {
+        gpiod_set_value(drvdata->tx, 0);
+    }
+    /* Data bits (8 bits) */
+    else if (bit < 8) {
+        gpiod_set_value(drvdata->tx, (drvdata->byte & (1 << bit)) >> bit);
+    }
+    /* Stop bit */
+    else {
+        gpiod_set_value(drvdata->tx, 1);
+        bit = -1;
+        return HRTIMER_NORESTART;
+    }
+    bit++;
+
+    /* Restart the timer to handle next bit */
+    hrtimer_forward_now(&drvdata->timer, drvdata->delay);
+    return HRTIMER_RESTART;
+}
+
+/**
  * @brief Bottom half of the device driver to process available bytes in the
  * device buffer to send via UART TX
  * 
@@ -223,8 +267,7 @@ static long n7d_ioctl(struct file * filp, unsigned int cmd, unsigned long arg)
  */
 static void n7d_work_func(struct work_struct * work)
 {
-    int err, byte;
-    static int tmp = 0; // TODO: just to toggle
+    int err;
     struct n7d_drvdata * drvdata = container_of(work, struct n7d_drvdata, transmit_work);
 
     /* Sleep until there is something in fifo or the device is unloading */
@@ -236,17 +279,23 @@ static void n7d_work_func(struct work_struct * work)
     }
 
     /* Since there is only 1 actual HW per device to write to, no locks */
-    err = kfifo_get(&drvdata->fifo, &byte);
+    err = kfifo_get(&drvdata->fifo, &drvdata->byte);
     if (err == 0) {
         printk(KERN_WARNING "n7d-work: kfifo_get() says empty although it shouldn't be\n");
         queue_work(drvdata->workqueue, &drvdata->transmit_work);
         return;
     }
 
-    // TODO: process the byte (just toggling for now)
-    pr_info("n7d-work: '%c', tmp=%d\n", byte, tmp);
-    tmp = tmp == 0 ? 1 : 0;
-    gpiod_set_value(drvdata->tx, tmp);
+    /* Sleep until the previous timer has stopped (previous byte sent) */
+    err = wait_event_interruptible(drvdata->work_waitq,
+                                   drvdata->closing || !hrtimer_active(&drvdata->timer));
+    if (err < 0 || drvdata->closing) {
+        /* If interrupted or woke up to close the device, stop the work */
+        return;
+    }
+
+    /* Start timer to bit-bang (send the bits of byte) */
+    hrtimer_start(&drvdata->timer, drvdata->delay, HRTIMER_MODE_REL);
 
     /* Wake up writer_waitq since new space is available */
     wake_up_interruptible(&drvdata->writer_waitq);
@@ -333,6 +382,11 @@ static int n7d_dt_probe(struct platform_device *pdev)
     queue_work(drvdata->workqueue, &drvdata->transmit_work);
     pr_info("n7d: initialized and queued transmission work\n");
 
+    /* Initialize the hrtimer and delay */
+    hrtimer_init(&drvdata->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+    drvdata->delay = ktime_set(0, NSEC_PER_SEC / n7d_baudrate);
+    drvdata->timer.function = n7d_timer_callback;
+
     /* Set the driver data to the platform device and misc device */
     dev_set_drvdata(&pdev->dev, drvdata);
 
@@ -362,13 +416,16 @@ static int n7d_dt_remove(struct platform_device *pdev)
         return -ENODATA;
     }
 
-    /* Unregister misc device */
-    misc_deregister(&drvdata->miscdev);
+    /* Stop the bit-bang timer */
+    hrtimer_cancel(&drvdata->timer);
 
     /* Mark as closing so new work will not be added. */
     drvdata->closing = true;
     wake_up_interruptible(&drvdata->writer_waitq);
     wake_up_interruptible(&drvdata->work_waitq);
+
+    /* Unregister misc device */
+    misc_deregister(&drvdata->miscdev);
 
     /* Cancel the remaining work, and wait for any remaining work */
     cancel_work_sync(&drvdata->transmit_work);
