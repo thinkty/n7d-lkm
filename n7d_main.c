@@ -239,7 +239,7 @@ static enum hrtimer_restart n7d_timer_callback(struct hrtimer * timer)
     static unsigned int bit = -1;
     struct n7d_drvdata * drvdata = container_of(timer, struct n7d_drvdata, timer);
 
-    /* No byte to process, set stop bit and restart timer */
+    /* No byte to process, repeat timer */
     if (drvdata->byte == 0) {
         hrtimer_forward_now(&drvdata->timer, drvdata->delay);
         return HRTIMER_RESTART;
@@ -260,7 +260,9 @@ static enum hrtimer_restart n7d_timer_callback(struct hrtimer * timer)
         drvdata->byte = 0;
         gpiod_set_value(drvdata->tx, 1);
         bit = -1;
-        wake_up_interruptible(&drvdata->work_waitq); // TODO: wake_up is safe to call in atomic context
+        /* Wake up work func to process next byte. Wake_up is safe to call in
+        atomic context */
+        wake_up_interruptible(&drvdata->work_waitq);
     }
 
     /* Restart the timer to handle next bit */
