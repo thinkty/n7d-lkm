@@ -241,7 +241,6 @@ static enum hrtimer_restart n7d_timer_callback(struct hrtimer * timer)
 
     /* No byte to process, set stop bit and restart timer */
     if (drvdata->byte == 0) {
-        gpiod_set_value(drvdata->tx, 1); // TODO: needed?
         hrtimer_forward_now(&drvdata->timer, drvdata->delay);
         return HRTIMER_RESTART;
     }
@@ -261,6 +260,7 @@ static enum hrtimer_restart n7d_timer_callback(struct hrtimer * timer)
         drvdata->byte = 0;
         gpiod_set_value(drvdata->tx, 1);
         bit = -1;
+        wake_up_interruptible(&drvdata->work_waitq); // TODO: wake_up is safe to call in atomic context
     }
 
     /* Restart the timer to handle next bit */
@@ -279,14 +279,10 @@ static void n7d_work_func(struct work_struct * work)
     int err;
     struct n7d_drvdata * drvdata = container_of(work, struct n7d_drvdata, transmit_work);
 
-    /* Busy wait until the previous byte has been sent */
-    // while (drvdata->byte != 0) {
-    // TODO:
-    // }
-
-    /* Sleep until there is something in fifo or the device is unloading */
+    /* Sleep until there is something in fifo and the timer is ready to send
+    another byte or the device is unloading */
     err = wait_event_interruptible(drvdata->work_waitq,
-                                   drvdata->closing || !kfifo_is_empty(&drvdata->fifo));
+                                   drvdata->closing || (!kfifo_is_empty(&drvdata->fifo) && drvdata->byte == 0));
     if (err < 0 || drvdata->closing) {
         /* If interrupted or woke up to close the device, stop the work */
         return;
