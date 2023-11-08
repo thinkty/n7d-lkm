@@ -239,7 +239,7 @@ static enum hrtimer_restart n7d_timer_callback(struct hrtimer * timer)
     static unsigned int bit = -1;
     struct n7d_drvdata * drvdata = container_of(timer, struct n7d_drvdata, timer);
 
-    drvdata->byte = '7';
+    drvdata->byte = '5';
 
     /* No byte to process, set stop bit and restart timer */
     // if (drvdata->byte == 0) {
