@@ -1,6 +1,6 @@
 /**
  * 
- * Contains N7D device ioctl configurations
+ * NOT USED!!!
  * 
  */
 

@@ -33,6 +33,7 @@
 #define N7D_DEVICE_WORKQUEUE   "n7d-workqueue"
 #define N7D_DEVICE_FIFO_SIZE   (8)
 #define N7D_DEVICE_TIMEOUT     (100)
+#define N7D_CLR_CHAR           'C' /* Special command to clear screen */
 
 /**
  * n7d_drvdata - driver data
@@ -74,7 +75,6 @@ MODULE_PARM_DESC(n7d_baudrate, "\tBaudrate of the device (default=38400)");
  */
 static int n7d_release(struct inode * inode, struct file * filp);
 static ssize_t n7d_write(struct file * filp, const char __user * buf, size_t count, loff_t * f_pos);
-static long n7d_ioctl(struct file * filp, unsigned int cmd, unsigned long arg);
 
 /**
  * N7D file (device) operations given as function pointers. .open is handled by
@@ -84,7 +84,6 @@ static struct file_operations n7d_fops = {
     .owner = THIS_MODULE,
     .release = n7d_release,
     .write = n7d_write,
-    .unlocked_ioctl = n7d_ioctl,
 };
 
 /**
@@ -142,12 +141,15 @@ static ssize_t n7d_write(struct file * filp, const char __user * buf, size_t cou
     not_copied = copy_from_user(tbuf, buf, to_copy);
     to_copy -= not_copied;
 
-    /* Check that it's all numerical */
+    /* Check that it's all numerical or special command */
     for (i = 0; i < to_copy; i++) {
-        if (tbuf[i] < '0' || tbuf[i] > '9') {
-            err = -EINVAL;
-            return err;
+        if ((tbuf[i] >= '0' && tbuf[i] <= '9') || tbuf[i] == N7D_CLR_CHAR) {
+            continue;
         }
+
+        /* Else, invalid character */
+        err = -EINVAL;
+        return err;
     }
 
     /* By being interruptible, when given any signal, the process will just
@@ -196,32 +198,6 @@ static ssize_t n7d_write(struct file * filp, const char __user * buf, size_t cou
     wake_up_interruptible(&drvdata->work_waitq);
 
     return to_copy;
-}
-
-/**
- * @brief Handle ioctl requests (clear screen) to the driver
- * 
- * @param filp Pointer to the open file for the device
- * @param cmd Ioctl command
- * @param arg Arguments for the command
- * 
- * @returns 0 on success, less than 0 on error.
- */
-static long n7d_ioctl(struct file * filp, unsigned int cmd, unsigned long arg)
-{
-    // struct n7d_drvdata * drvdata = get_drvdata(filp);
-
-    switch (cmd) {
-        case N7D_CLR:
-            pr_info("n7d: Clear display\n");
-            // TODO: send a special (non-numerical) character
-            break;
-        
-        default:
-            return -ENOTTY;
-    }
-
-    return 0;
 }
 
 /**
