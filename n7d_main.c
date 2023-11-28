@@ -34,6 +34,7 @@
 #define N7D_DEVICE_FIFO_SIZE   (8)
 #define N7D_DEVICE_TIMEOUT     (100)
 #define N7D_CLR_CHAR           'C' /* Special command to clear screen */
+#define N7D_DSH_CHAR           '-' /* Sepcial character for dash */
 
 /**
  * n7d_drvdata - driver data
@@ -143,7 +144,7 @@ static ssize_t n7d_write(struct file * filp, const char __user * buf, size_t cou
 
     /* Check that it's all numerical or special command */
     for (i = 0; i < to_copy; i++) {
-        if ((tbuf[i] >= '0' && tbuf[i] <= '9') || tbuf[i] == N7D_CLR_CHAR) {
+        if ((tbuf[i] >= '0' && tbuf[i] <= '9') || tbuf[i] == N7D_CLR_CHAR || tbuf[i] == N7D_DSH_CHAR) {
             continue;
         }
 
