@@ -6,23 +6,24 @@
 # @see https://openweathermap.org/current
 
 # OpenWeatherMap API Key
-AppId=""
+appId=""
 
 # West Lafayette coordinates
-Lat=40.4259
-Lon=-86.9081
+lat=40.4259
+lon=-86.9081
 
 # Show temperature in celcius
-Units="metric"
+units="metric"
 
 # Make the query and parse the feels_like temperature
-Temperature=$(curl "https://api.openweathermap.org/data/2.5/weather?lat=$Lat&lon=$Lon&units=$Units&appid=$AppId" --silent | jq .main.feels_like)
+temperature=$(curl "https://api.openweathermap.org/data/2.5/weather?lat=$lat&lon=$lon&units=$units&appid=$appId" --silent | jq .main.feels_like)
 
 # Check if the query failed
-if [ -z $Temperature ]
+if [ -z $temperature ]
 then
 	echo "Failed to fetch temperature data..."
 else
-	echo "Fetched temperature data: $Temperature"
-	echo -n $Temperature > /dev/n7d
+	echo "Fetched temperature data: $temperature"
+	rounded=$(printf '%.0f' $temperature)
+	echo -n $rounded > /dev/n7d
 fi
