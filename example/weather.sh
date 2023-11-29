@@ -19,11 +19,12 @@ units="metric"
 temperature=$(curl "https://api.openweathermap.org/data/2.5/weather?lat=$lat&lon=$lon&units=$units&appid=$appId" --silent | jq .main.feels_like)
 
 # Check if the query failed
-if [ -z $temperature ]
+if [ $temperature = "null" ]
 then
 	echo "Failed to fetch temperature data..."
 else
 	echo "Fetched temperature data: $temperature"
 	rounded=$(printf '%.0f' $temperature)
-	echo -n $rounded > /dev/n7d
+	echo "Rounded temperature: $rounded"
+        echo -n "C$rounded" > /dev/n7d
 fi
